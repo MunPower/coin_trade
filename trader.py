@@ -167,6 +167,11 @@ def fit_volume(v: float) -> Decimal:
     return Decimal(str(v)).quantize(Decimal("0.00000001"), ROUND_DOWN)
 
 
+def buy_volume(krw: float, price: Decimal) -> Decimal:
+    """'krw원어치' 살 수량. 내림하면 5,000원이 4,999.99원이 되어 최소 주문 금액에 걸리므로 올림 (차이는 1원 미만)"""
+    return (Decimal(str(krw)) / price).quantize(Decimal("0.00000001"), ROUND_UP)
+
+
 def fmt_dec(d: Decimal) -> str:
     s = format(d.normalize(), "f")
     return s.rstrip("0").rstrip(".") if "." in s else s
@@ -394,6 +399,8 @@ class Engine:
             if on and key == "low" and self.buy_krw(r) < MIN_ORDER_KRW:
                 return f"먼저 아래 [자동매매] 칸에서 '자동매수 1회 금액'을 {MIN_ORDER_KRW:,}원 이상 넣어 주세요."
             r[key] = on
+            if key == "low" and not on:
+                r["short"] = False
             note = ""
             if not on and r.get("state") in PENDING:          # 그 버튼으로 걸린 주문이면 취소
                 mine = (key == "low" and r["state"] == BUYING) or (r["state"] == SELLING and r.get("kind") == key)
@@ -482,9 +489,10 @@ class Engine:
             if r.get("low"):
                 if p > b["low"]:
                     r["msg"] = ""
+                    r["short"] = False
                     return
                 price = fit_price(m, b["low"], "bid", p)
-                vol = fit_volume(self.buy_krw(r) / float(price))
+                vol = buy_volume(self.buy_krw(r), price)
                 cost = float(price * vol)
                 if cost < MIN_ORDER_KRW:
                     raise UpbitError(f"주문 금액 {cost:,.0f}원 < 최소 {MIN_ORDER_KRW:,}원")
@@ -493,10 +501,19 @@ class Engine:
                     self._log(r, "자동매수 체결(모의)", float(price), float(vol))
                     return
                 krw = (acc or {}).get("KRW", {}).get("balance", 0.0)
-                if krw < cost * (1 + FEE):
-                    r["msg"] = f"예수금 부족 (필요 {cost * (1 + FEE):,.0f}원 / 있음 {krw:,.0f}원) — 기다리는 중"
+                need = cost * (1 + FEE)
+                if krw < need:
+                    # 앞서 주문한 코인들이 예수금을 묶어서 모자람 → 주문을 보내지 않고 알림만 남김 (돈이 생기면 그때 매수)
+                    r["msg"] = f"예수금 부족 (필요 {need:,.0f}원 / 있음 {krw:,.0f}원) — 주문 안 함, 기다리는 중"
+                    if not r.get("short"):                     # 기록은 처음 한 번만 (3초마다 쌓이지 않게)
+                        r["short"] = True
+                        self._log(r, "예수금 부족 — 주문 안 함", float(price), float(vol),
+                                  f"필요 {need:,.0f}원 / 있음 {krw:,.0f}원")
                     return
                 o = self.client.limit_order(m, "bid", vol, price)
+                if acc is not None and "KRW" in acc:           # 같은 3초 안의 다음 코인이 이 돈을 또 쓰지 않게 바로 뺌
+                    acc["KRW"]["balance"] = krw - need
+                r["short"] = False
                 r.update(state=BUYING, order=o["uuid"], kind="low", msg=f"자동매수 주문 {fmt_dec(price)}원")
                 self._log(r, "자동매수 주문", float(price), float(vol))
             elif r.get("mid") or r.get("up"):               # 하한 매수 없이 → 이미 가진 코인을 팔기

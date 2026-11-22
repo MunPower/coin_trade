@@ -466,7 +466,7 @@ LIST2_CSS = """<style>
 .cl-row .nm .sub{display:flex;flex-wrap:wrap;align-items:center;gap:2px 3px;font-size:11px;font-weight:400;color:#999;white-space:normal}
 /* 켜진 버튼 표시: 코인 영문 옆(둘째 줄)에 붙이고, 칸이 좁으면 다음 줄로 넘어감 → 잘리지 않음 */
 .cl-row .nm .on{display:inline-block;padding:0 4px;border-radius:3px;color:#fff;font-size:10px;font-weight:600;line-height:15px}
-.cl-row .nm .on.up{background:#1a56db}.cl-row .nm .on.mid{background:#444}.cl-row .nm .on.low{background:#e5484d}
+.cl-row .nm .on.short{background:#f59f00}.cl-row .nm .on.up{background:#1a56db}.cl-row .nm .on.mid{background:#444}.cl-row .nm .on.low{background:#e5484d}
 .cl-row .sg{justify-content:center;font-weight:800}.cl-row .sg.buy{color:#e5484d}.cl-row .sg.sell{color:#1a56db}
 .cl-row .tv{color:#333}
 .cl-row .hm{font-size:11px;color:#999;font-weight:400;margin-left:4px}
@@ -515,6 +515,7 @@ LIST2_CSS = """<style>
 .bkval{font-size:17px;font-weight:700;color:#e5484d;text-align:center;white-space:nowrap}.bkval.mt{color:#999;font-size:15px}
 [class*="st-key-bkm_"] button,[class*="st-key-bkp_"] button{min-height:34px;padding:0 !important;font-weight:700}
 [class*="st-key-bkm_"] button p,[class*="st-key-bkp_"] button p{font-size:18px !important}
+.shortnote{font-size:14px;color:#7a4a00;background:#fff4dc;border:1px solid #f1c36b;border-radius:8px;padding:8px 12px;margin:2px 0 6px 0}
 .offnote{font-size:13px;color:#8a5a00;background:#fff4dc;border:1px solid #f1d9a6;border-radius:8px;padding:6px 10px}
 [class*="st-key-tbtn_"] button:disabled{opacity:.45}
 [class*="st-key-btn_allon_"] button{background:#f4f5f7 !important;border-color:#c9ced6 !important}
@@ -789,7 +790,8 @@ def trade_list(rows, sig, hm=None):
             k = "eq" if pct is None else ("up" if pct > 0 else ("dn" if pct < 0 else "eq"))
             arrow = "" if not pct else ("▲ " if pct > 0 else "▼ ")
             pct_t = "-" if pct is None else f"{pct:+.2f}%" if pct else "0.00%"
-            ons = "".join(f'<span class="on {b_}">{BTN_TAG[b_]}</span>'
+            ons = ('<span class="on short">예수금 부족</span>' if rule.get("short") and rule.get("low") else "") + \
+                "".join(f'<span class="on {b_}">{BTN_TAG[b_]}</span>'
                           for b_ in ("up", "mid", "low") if rule.get(b_))          # 켜져 있는 버튼 표시
             cls = "cl-row" + (" open" if opened == m else (" ev" if i % 2 == 0 else ""))
             with st.container(key=f"lrow_{m}"):
@@ -881,12 +883,18 @@ def list_area(rows, sig, hm, left_html, asof_html):
         with t2:
             top_controls()                                  # 모드(모의/실전) · 자동매매 켜기
         t3.markdown(asof_html, unsafe_allow_html=True)
+    short = [r for r in get_engine().snapshot()["rules"].values() if r.get("short") and r.get("low")]
+    if short:                                               # 예수금이 모자라 주문하지 않고 기다리는 코인 알림
+        names = ", ".join(html.escape(r.get("name") or r["market"]) for r in short)
+        st.markdown(f'<div class="shortnote">⚠ <b>예수금 부족</b> — 매수가능 값에 닿았지만 예수금이 모자라 '
+                    f'<b>주문하지 않고 기다리는 코인</b>: {names}. 다른 코인이 팔려 예수금이 생기면 그때 삽니다.</div>',
+                    unsafe_allow_html=True)
     trade_list(rows, sig, hm)
 
 
 # 위쪽 버튼(모의/실전, 자동매매 켜기)과 리스트 안의 버튼(줄 펼치기, 자동매도/중간자동매도/자동매수, 모두 취소)을
 # 누르면 이 부분만 다시 그림 → 페이지 전체를 다시 계산하지 않으므로 리스트가 접혔다 펴지지 않음
-list_area_part = st.fragment(list_area) if hasattr(st, "fragment") else list_area
+list_area_part = st.fragment(list_area, run_every=10) if hasattr(st, "fragment") else list_area   # 10초마다 상태 표시 새로 고침
 
 
 def trade_panel():
