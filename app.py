@@ -548,7 +548,6 @@ def _on_toggle(m, k, kr):
     eng = get_engine()
     if k == "low" and not (eng.snapshot().get("buy_krw") or 0) >= trader.MIN_ORDER_KRW:
         eng.set_buy_krw(DEFAULT_BUY_KRW)     # 금액이 없어서 자동매수가 안 눌리는 일이 없게 기본 금액을 넣어 둠
-        st.session_state["buy_krw"] = int(DEFAULT_BUY_KRW)
     note = eng.toggle(m, k, kr)
     if note:
         st.session_state.setdefault("trade_msgs", []).append(note)
@@ -602,15 +601,15 @@ def _hold_box(eng, acc, m, sym, close) -> str:
     return f'<div class="hbox"><div class="plan">{tag}{plan}</div><div class="hgrid">{grid}</div></div>'
 
 
-def _on_buy_amount(kkey):
-    """펼친 칸의 '자동매수 1회 금액'을 바꿈 → 모든 코인 공통 금액으로 저장"""
-    v = st.session_state.get(kkey) or 0
-    note = get_engine().set_buy_krw(v)
-    st.session_state["buy_krw"] = int(v)                   # 아래 [자동매매] 칸의 같은 금액도 맞춰 둠
+def _save_buy_amount(eng, v):
+    """자동매수 1회 금액 저장 (모든 코인 공통) 후 화면을 다시 그림"""
+    v = int(v or 0)
+    note = eng.set_buy_krw(v)
     if 0 < v < trader.MIN_ORDER_KRW:
-        note = (note + " " if note else "") + f"자동매수 1회 금액은 {trader.MIN_ORDER_KRW:,}원 이상이어야 해요."
+        note = f"자동매수 1회 금액은 {trader.MIN_ORDER_KRW:,}원 이상이어야 해요. " + (note or "")
     if note:
-        st.session_state.setdefault("trade_msgs", []).append(note)
+        st.session_state.setdefault("trade_msgs", []).append(note.strip())
+    st.rerun()
 
 
 def _coin_panel(eng, acc, m, kr, sym, close, rule):
@@ -654,16 +653,16 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
                            on_click=_on_toggle, args=(m, k, kr), help=BTN_HELP[k])
         # ── 자동매수 1회 금액 (모든 코인 공통) — 여기서 바로 바꿈 ──
         bk = int(eng.snapshot().get("buy_krw") or 0)
-        kkey = f"bk_{m}"
-        st.session_state[kkey] = bk                         # 다른 곳에서 바꿔도 항상 지금 값으로 보여 줌
         krw = (acc or {}).get("KRW", {}).get("balance") if acc is not None else None
         with st.container(key=f"lamt_{m}"):
             c0, c1, c2, c3 = st.columns([1.25, 1.6, 0.25, 3], vertical_alignment="center")
             c0.markdown('<div style="font-size:14px;font-weight:600;color:#e5484d;white-space:nowrap">자동매수 1회 금액</div>',
                         unsafe_allow_html=True)
-            c1.number_input("자동매수 1회 금액", min_value=0, step=5000, key=kkey, label_visibility="collapsed",
-                            on_change=_on_buy_amount, args=(kkey,),
-                            help="모든 코인 공통. − / + 는 5,000원씩. 숫자를 직접 쓰고 Enter를 눌러도 돼요. (최소 5,000원)")
+            # 칸 이름(key)에 지금 금액을 넣어 둠 → 다른 곳에서 금액이 바뀌면 칸이 새로 만들어져 항상 지금 값을 보여 줌.
+            # 버튼을 누를 때 예전 값이 따라 들어와 자동매수가 꺼졌다 켜지는 일이 없도록 콜백(on_change)은 쓰지 않음
+            nv = c1.number_input("자동매수 1회 금액", min_value=0, step=5000, value=bk, key=f"bk_{m}_{bk}",
+                                 label_visibility="collapsed",
+                                 help="모든 코인 공통. − / + 는 5,000원씩. 숫자를 직접 쓰고 Enter를 눌러도 돼요. (최소 5,000원)")
             c2.markdown('<div style="font-size:14px">원</div>', unsafe_allow_html=True)
             if not bk:
                 info = f"아직 0원이에요 · 자동매수를 누르면 {DEFAULT_BUY_KRW:,}원으로 시작해요"
@@ -672,6 +671,8 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
             else:
                 info = "모든 코인에 같은 금액이 적용돼요"
             c3.markdown(f'<div class="bkinfo">{info}</div>', unsafe_allow_html=True)
+        if int(nv or 0) != bk:                              # 사용자가 금액을 실제로 바꿨을 때만 저장
+            _save_buy_amount(eng, nv)
         for msg in st.session_state.pop("_panel_msgs", []):
             st.warning(msg)
 
@@ -777,14 +778,12 @@ def trade_panel():
     if on != snap["enabled"]:
         eng.set_enabled(on)
         st.rerun()
-    def _on_buy_krw():
-        note = eng.set_buy_krw(st.session_state.get("buy_krw"))
-        if note:
-            st.session_state.setdefault("trade_msgs", []).append(note)
-    st.session_state["buy_krw"] = int(snap.get("buy_krw") or 0)   # 펼친 칸에서 바꾼 값과 항상 같게
-    st.number_input("자동매수 1회 금액(원) — 모든 코인 공통", min_value=0, step=5000,
-                    key="buy_krw", on_change=_on_buy_krw,
-                    help="자동매수가 켜진 코인이 매수가능 값에 닿으면 이 금액만큼 삽니다. (최소 5,000원)")
+    bk0 = int(snap.get("buy_krw") or 0)
+    nv0 = st.number_input("자동매수 1회 금액(원) — 모든 코인 공통", min_value=0, step=5000, value=bk0,
+                          key=f"buy_krw_{bk0}",
+                          help="자동매수가 켜진 코인이 매수가능 값에 닿으면 이 금액만큼 삽니다. (최소 5,000원)")
+    if int(nv0 or 0) != bk0:
+        _save_buy_amount(eng, nv0)
     if acc and snap.get("buy_krw"):
         st.caption(f"예수금의 약 {snap['buy_krw'] / max(krw.get('balance', 0), 1) * 100:.1f}% · 예수금으로 약 "
                    f"{int(krw.get('balance', 0) // snap['buy_krw'])}번 살 수 있어요")
