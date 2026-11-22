@@ -777,11 +777,6 @@ def trade_list(rows, sig, hm=None):
                 _coin_panel(eng, acc, m, kr, sym, close, rule)
 
 
-# 리스트 안의 버튼(줄 펼치기, 자동매도/중간자동매도/자동매수)을 누르면 리스트 부분만 다시 그림
-# → 페이지 전체를 다시 계산하지 않으므로 접혔다 펴지거나, 그 사이에 잘못 눌려 차트로 넘어가는 일이 없음
-trade_list_part = st.fragment(trade_list) if hasattr(st, "fragment") else trade_list
-
-
 @st.dialog("실전 모드로 바꿀까요?")
 def _real_dialog():
     st.markdown("실전 모드에서는 **업비트에 실제 돈으로 주문**이 나갑니다.  \n"
@@ -838,6 +833,22 @@ def top_controls():
                        " 켜져 있으면 3초마다 현재가를 확인해서, 버튼이 켜진 코인만 조건이 맞을 때 주문합니다.")
     if st.session_state.pop("_ask_real", False) and snap["mock"]:
         _real_dialog()
+
+
+def list_area(rows, sig, hm, left_html, asof_html):
+    """업비트 화면 위쪽 전체: [탭·새로고침·시간 | 모의·실전·자동매매 켜기 | 기준 시각] + 누르면 펼쳐지는 리스트"""
+    with st.container(key="topbar"):
+        t1, t2, t3 = st.columns([5.2, 3.6, 2.5], vertical_alignment="center")
+        t1.markdown(left_html, unsafe_allow_html=True)
+        with t2:
+            top_controls()                                  # 모드(모의/실전) · 자동매매 켜기
+        t3.markdown(asof_html, unsafe_allow_html=True)
+    trade_list(rows, sig, hm)
+
+
+# 위쪽 버튼(모의/실전, 자동매매 켜기)과 리스트 안의 버튼(줄 펼치기, 자동매도/중간자동매도/자동매수, 모두 취소)을
+# 누르면 이 부분만 다시 그림 → 페이지 전체를 다시 계산하지 않으므로 리스트가 접혔다 펴지지 않음
+list_area_part = st.fragment(list_area) if hasattr(st, "fragment") else list_area
 
 
 def trade_panel():
@@ -1008,51 +1019,51 @@ if not qp.get("code"):
 
     codes = tuple(f"{XCH}:{r[0]}" for r in rows)
     days = max(int(calc), 180)
-    note = st.empty()
-    ph = st.empty()
-    known = known_signals(codes, days)                        # 보관된 신호(받기·계산 없이 바로)
     UP = XCH == "upbit"                                       # 업비트 = 누르면 아래로 펼쳐지는 리스트 + 자동매매
+    known = known_signals(codes, days)                        # 보관된 신호(받기·계산 없이 바로)
+    # 업비트는 화면 칸의 순서를 매번 똑같이 유지: [① 임시 안내 칸] [② 버튼 줄+리스트] [③ 아래 안내·기록]
+    # 다시 계산하는 동안에는 ①만 쓰고 ②는 건드리지 않음 → 이전 리스트(펼친 칸 포함)가 그대로 보여서 접혔다 펴지지 않음
+    note = st.empty()
+    ph = None if UP else st.empty()
     if not UP:
         ph.markdown(build(known), unsafe_allow_html=True)     # ① 계산하는 동안 리스트를 먼저 표시
     elif len(known) < len(codes) and not st.session_state.get("_list_drawn"):
-        # 업비트: 처음 열 때만 임시 표를 보여 줌 (링크 없음 → 눌러도 차트로 안 넘어감).
-        # 한 번 그린 뒤에는 다시 계산하는 동안 이전 리스트(펼친 칸 포함)를 그대로 둬서 접혔다 펴지지 않게 함
-        ph.markdown(build(known, links=False), unsafe_allow_html=True)
-    if len(known) < len(codes):
+        with note.container():                                # 처음 열 때만 임시 표 (링크 없음 → 차트로 안 넘어감)
+            st.caption("⏳ 매수·매도 신호를 계산하는 중입니다… (처음 한 번은 조금 걸려요)")
+            st.markdown(build(known, links=False), unsafe_allow_html=True)
+    if len(known) < len(codes) and not UP:
         note.caption("⏳ 매수·매도 신호를 계산하는 중입니다… (처음 한 번은 조금 걸려요)")
     _t0 = time.time()
     _hx = ThreadPoolExecutor(max_workers=1)                  # 고가·저가 시각은 신호 계산과 동시에 구함
     _hf = _hx.submit(all_hl_times, tuple((f"{XCH}:{r[0]}", r[7], r[8]) for r in rows))
+    warn = []
     try:
         sig, _got, t_fetch, t_calc = list_signals(codes)
     except Exception as e:
         sig, _got, t_fetch, t_calc = {}, len(codes), time.time() - _t0, 0.0
-        st.caption(f"신호 계산 오류: {e}")
-    note.empty()
+        warn.append(f"신호 계산 오류: {e}")
     if _got < len(rows):          # 시세를 다 못 받았으면 알려줌 (빈칸 = 계산 못 한 코인 포함)
-        st.caption(f"※ {len(rows)}개 중 {_got}개만 시세를 받아 신호를 계산했습니다 ({time.time() - _t0:.0f}초).")
+        warn.append(f"※ {len(rows)}개 중 {_got}개만 시세를 받아 신호를 계산했습니다 ({time.time() - _t0:.0f}초).")
     hm = {}
-    if _hf is not None:
-        try:
-            hm = _hf.result(timeout=25)
-        except Exception:
-            hm = {}
-        _hx.shutdown(wait=False)
+    try:
+        hm = _hf.result(timeout=25)
+    except Exception:
+        hm = {}
+    _hx.shutdown(wait=False)
     _tm = timing_html([("리스트", t_list), ("시세", t_fetch), ("계산", t_calc), ("전체", time.time() - _t0)])
     if UP:
-        with ph.container():                                  # ② 버튼 줄 + 누르면 펼쳐지는 리스트
-            with st.container(key="topbar"):
-                t1, t2, t3 = st.columns([5.2, 3.6, 2.5], vertical_alignment="center")
-                t1.markdown(build(sig, _tm, table=False, part="left"), unsafe_allow_html=True)
-                with t2:
-                    top_controls()                          # 모드(모의/실전) · 자동매매 켜기
-                t3.markdown(build(sig, part="asof"), unsafe_allow_html=True)
-            trade_list_part(rows, sig, hm)
+        note.empty()
+        list_area_part(rows, sig, hm, build(sig, _tm, table=False, part="left"), build(sig, part="asof"))   # ②
         st.session_state["_list_drawn"] = True
+        for w in warn:
+            st.caption(w)
         st.caption("※ 코인을 누르면 그 아래에 자동매매 버튼이 펼쳐집니다. 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. "
                    "(시간)은 그 값이 나온 한국시간이며, 시가 시간은 거래소의 하루 시작 시각입니다.")
         trade_panel()
     else:
+        note.empty()
+        for w in warn:
+            st.caption(w)
         ph.markdown(build(sig, _tm, hm), unsafe_allow_html=True)      # ② 신호 칸 + 걸린 시간 채워서 표시
         st.caption("※ 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. (시간)은 그 값이 나온 한국시간이며, 시가 시간은 거래소의 하루 시작 시각입니다.")
         st.caption("※ 자동매매 칸은 [업비트] 화면에서 보입니다.")
