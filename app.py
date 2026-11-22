@@ -480,6 +480,10 @@ LIST2_CSS = """<style>
 [class*="st-key-lamt_"] [data-testid="stHorizontalBlock"],[class*="st-key-tbtn_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:6px !important;align-items:center}
 [class*="st-key-lamt_"] [data-testid="stColumn"],[class*="st-key-tbtn_"] [data-testid="stColumn"]{min-width:0 !important;width:auto !important}
 [class*="st-key-tbtn_"] [data-testid="stColumn"]{flex:1 1 0 !important}
+[class*="st-key-tbtn_"] [data-testid="stColumn"]:first-child{flex:0 0 108px !important}
+[class*="st-key-tbtn_"] [class*="st-key-btn_all_"] button{background:#f4f5f7 !important;border-color:#c9ced6 !important}
+[class*="st-key-tbtn_"] [class*="st-key-btn_all_"] button p{color:#555 !important}
+@media (max-width:600px){[class*="st-key-tbtn_"] [data-testid="stColumn"]:first-child{flex:0 0 64px !important}}
 [class*="st-key-lamt_"]{background:#fff5f5;border:1px solid #f3c9cb;border-radius:8px;padding:6px 10px}
 [class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(1){flex:0 0 auto !important}
 [class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(2){flex:0 1 190px !important}
@@ -542,6 +546,17 @@ def _on_row(m):
 
 
 DEFAULT_BUY_KRW = 10_000      # 자동매수 1회 금액을 아직 안 정했으면 이 금액으로 시작 (아래 [자동매매] 칸에서 바꿈)
+
+
+def _on_cancel_all(m, kr):
+    """이 코인의 켜진 버튼(자동매도·중간자동매도·자동매수)을 모두 끔. 걸려 있던 주문도 같이 취소됨"""
+    eng = get_engine()
+    rule = eng.snapshot()["rules"].get(m, {})
+    for k in ("up", "mid", "low"):
+        if rule.get(k):
+            note = eng.toggle(m, k, kr)
+            if note:
+                st.session_state.setdefault("trade_msgs", []).append(note)
 
 
 def _on_toggle(m, k, kr):
@@ -644,7 +659,12 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
             _password_box()
             return
         with st.container(key=f"tbtn_{m}"):
-            for col, k in zip(st.columns(3), ("up", "mid", "low")):
+            cols = st.columns(4)
+            any_on = any(rule.get(k) for k in ("up", "mid", "low"))
+            cols[0].button("모두 취소", key=f"btn_all_{m}", width="stretch", on_click=_on_cancel_all, args=(m, kr),
+                           help="이 코인의 자동매도 · 중간자동매도 · 자동매수를 한 번에 모두 끕니다" if any_on
+                           else "켜져 있는 버튼이 없어요")
+            for col, k in zip(cols[1:], ("up", "mid", "low")):
                 is_on = bool(rule.get(k))
                 val = f"({px(b[k])})" if b else ""                 # 자동매도(매도가능 값) · 중간자동매도(중간값) · 자동매수(매수가능 값)
                 label = f"{BTN_LABEL[k]}{val}" + (" 취소" if is_on else "")
