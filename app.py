@@ -646,6 +646,11 @@ def trade_list(rows, sig, hm=None):
                 _coin_panel(eng, acc, m, kr, sym, close, rule)
 
 
+# 리스트 안의 버튼(줄 펼치기, 자동매도/중간자동매도/자동매수)을 누르면 리스트 부분만 다시 그림
+# → 페이지 전체를 다시 계산하지 않으므로 접혔다 펴지거나, 그 사이에 잘못 눌려 차트로 넘어가는 일이 없음
+trade_list_part = st.fragment(trade_list) if hasattr(st, "fragment") else trade_list
+
+
 def trade_panel():
     """리스트 아래: 예수금 · 모드 · 자동매매 켜기 · 진행 현황"""
     eng, acc, acc_err = _trade_ctx()
@@ -819,7 +824,7 @@ if not qp.get("code"):
         st.markdown(f'<a href="{link(x=other)}" target="_self">→ {EXCH[other][0]}로 보기</a>', unsafe_allow_html=True)
         st.stop()
 
-    def build(sig, tm="", hm=None, table=True):
+    def build(sig, tm="", hm=None, table=True, links=True):
         hm = hm or {}
         h = [LIST_CSS, '<div class="sl-top">']
         for k_, (label, _) in EXCH.items():
@@ -835,7 +840,7 @@ if not qp.get("code"):
         for i, (m, kr, sym, close, chg, pct, op, hi, lo, tv, prev) in enumerate(rows, 1):
             key = f"{XCH}:{m}"
             href = html.escape(link(code=m, name=kr, x=XCH))
-            a = f'<a href="{href}" target="_self">'
+            a = f'<a href="{href}" target="_self">' if links else '<a>'     # links=False: 눌러도 차트로 안 넘어감
             d = dec_of(close)
             tt = hm.get(key, {})
             def when(t):                                       # 가격 옆 작은 회색 (시:분)
@@ -871,8 +876,12 @@ if not qp.get("code"):
     ph = st.empty()
     known = known_signals(codes, days)                        # 보관된 신호(받기·계산 없이 바로)
     UP = XCH == "upbit"                                       # 업비트 = 누르면 아래로 펼쳐지는 리스트 + 자동매매
-    if not UP or len(known) < len(codes):
+    if not UP:
         ph.markdown(build(known), unsafe_allow_html=True)     # ① 계산하는 동안 리스트를 먼저 표시
+    elif len(known) < len(codes) and not st.session_state.get("_list_drawn"):
+        # 업비트: 처음 열 때만 임시 표를 보여 줌 (링크 없음 → 눌러도 차트로 안 넘어감).
+        # 한 번 그린 뒤에는 다시 계산하는 동안 이전 리스트(펼친 칸 포함)를 그대로 둬서 접혔다 펴지지 않게 함
+        ph.markdown(build(known, links=False), unsafe_allow_html=True)
     if len(known) < len(codes):
         note.caption("⏳ 매수·매도 신호를 계산하는 중입니다… (처음 한 번은 조금 걸려요)")
     _t0 = time.time()
@@ -897,7 +906,8 @@ if not qp.get("code"):
     if UP:
         with ph.container():                                  # ② 버튼 줄 + 누르면 펼쳐지는 리스트
             st.markdown(build(sig, _tm, table=False), unsafe_allow_html=True)
-            trade_list(rows, sig, hm)
+            trade_list_part(rows, sig, hm)
+        st.session_state["_list_drawn"] = True
         st.caption("※ 코인을 누르면 그 아래에 자동매매 버튼이 펼쳐집니다. 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. "
                    "(시간)은 그 값이 나온 한국시간이며, 시가 시간은 거래소의 하루 시작 시각입니다.")
         trade_panel()
