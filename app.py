@@ -841,70 +841,29 @@ def top_controls():
 
 
 def trade_panel():
-    """리스트 아래: 예수금 · 모드 · 자동매매 켜기 · 진행 현황"""
+    """리스트 아래: 매매 기록만 (예수금·금액·모드·켜기는 위로 옮김). 오류가 있을 때만 빨간 안내"""
     eng, acc, acc_err = _trade_ctx()
-    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-    st.markdown("#### 🤖 자동매매 (업비트)")
     if _locked():
-        _password_box()
         return
-    snap = eng.snapshot()
-    krw = acc.get("KRW", {}) if acc else {}
-    c1, c2, c3 = st.columns(3)
-    c1.metric("예수금 (주문 가능)", f"{krw.get('balance', 0):,.0f}원" if acc else "-",
-              help=f"주문 중 {krw.get('locked', 0):,.0f}원은 빠진 값입니다." if acc else None)
-    c2.metric("자동매수 예정", f"{eng.planned_krw():,.0f}원", help="자동매수가 켜져 있고 아직 사지 않은 코인들의 매수 금액 합")
-    c3.metric("상태", ("🟢 켜짐" if snap["enabled"] else "⚪ 꺼짐") + (" · 모의" if snap["mock"] else " · 실전"))
-    if eng.client is None:
-        st.info("업비트 API 키가 아직 없어서 **모의 모드**로만 동작합니다. (실제 주문 없이 '체결됐다고 치고' 기록만 남겨요)")
     if acc_err:
         st.error(f"계좌 조회 실패: {acc_err}{_ip_hint(acc_err)}")
 
-    st.caption("모드(모의/실전)와 자동매매 켜기는 화면 맨 위 [새로고침] 오른쪽에 있어요.")
-    bk0 = int(snap.get("buy_krw") or 0)
-    nv0 = st.number_input("자동매수 1회 금액(원) — 모든 코인 공통", min_value=0, step=5000, value=bk0,
-                          key=f"buy_krw_{bk0}",
-                          help="자동매수가 켜진 코인이 매수가능 값에 닿으면 이 금액만큼 삽니다. (최소 5,000원)")
-    if int(nv0 or 0) != bk0:
-        _save_buy_amount(eng, nv0)
-    if acc and snap.get("buy_krw"):
-        st.caption(f"예수금의 약 {snap['buy_krw'] / max(krw.get('balance', 0), 1) * 100:.1f}% · 예수금으로 약 "
-                   f"{int(krw.get('balance', 0) // snap['buy_krw'])}번 살 수 있어요")
-    st.caption("자동매수 = 매수가능 값에서 매수 · 중간자동매도 = 추세가 하락 중일 때 중간값에서 절반 매도 (상승 중이면 건너뜀) · "
-               "자동매도 = 매도가능 값에서 남은 것 전부 매도. 다 팔고 나서도 자동매수가 켜져 있으면 다음 매수가능 값에서 다시 삽니다. "
-               "자동매수 없이 자동매도/중간자동매도만 켜면 이미 가진 코인을 팝니다.")
-    if st.button("↺ 완료·오류 상태 초기화", key="trade_reset"):
-        eng.reset()
-        st.rerun()
-
-    def live_status():
+    def live_log():                                       # 5초마다 이 부분만 새로 고침
         s = eng.snapshot()
-        when = time.strftime("%H:%M:%S", time.localtime(eng.last_tick)) if eng.last_tick else "-"
-        st.markdown(f"<span class='tm'>⏱ 마지막 확인 {when} · {'켜짐' if s['enabled'] else '꺼짐'} · "
-                    f"{'모의' if s['mock'] else '실전'}</span>", unsafe_allow_html=True)
         if eng.last_error:
             st.caption(f"⚠️ 최근 오류: {eng.last_error}{_ip_hint(eng.last_error)}")
-        act = [r for r in s["rules"].values() if any(r.get(k) for k in trader.BTN) or r.get("state") not in (trader.WAIT,)]
-        if act:
-            def bv(r, k):
-                return px(r["bands"][k]) if r.get("bands") else "-"
-            st.dataframe(pd.DataFrame([{
-                "코인": r.get("name"),
-                "켜진 버튼": " ".join(BTN_LABEL[k] for k in ("up", "mid", "low") if r.get(k)) or "-",
-                "상태": r.get("state"), "현재가": px(eng.last_prices.get(r["market"])),
-                "추세": ("▼하락" if r["bands"]["falling"] else "▲상승") if r.get("bands") else "-",
-                "매도가능": bv(r, "up"), "중간값": bv(r, "mid"), "매수가능": bv(r, "low"),
-                "보유(이 프로그램)": r.get("held") or 0, "메모": r.get("msg", "")} for r in act]),
-                hide_index=True, width="stretch")
-        if s["log"]:
-            with st.expander(f"매매 기록 (최근 {min(len(s['log']), 30)}개)", expanded=False):
+        n = min(len(s["log"]), 30)
+        with st.expander(f"매매 기록 (최근 {n}개)" if n else "매매 기록 (아직 없음)", expanded=False):
+            if s["log"]:
                 st.dataframe(pd.DataFrame(s["log"][:30]), hide_index=True, width="stretch")
+                st.caption("전체 기록은 코인002 폴더의 trade_log.csv 파일에 있어요 (엑셀로 열 수 있어요).")
+            else:
+                st.caption("자동매수·자동매도가 체결되면 여기에 기록돼요.")
 
-    st.markdown("##### 진행 현황")
     if hasattr(st, "fragment"):
-        st.fragment(run_every=5)(live_status)()           # 5초마다 이 부분만 새로 고침
+        st.fragment(run_every=5)(live_log)()
     else:
-        live_status()
+        live_log()
 
 
 # ───────────── ① 리스트 화면 ─────────────
