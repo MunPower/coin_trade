@@ -398,6 +398,7 @@ def _get_engine(ver: float):
     ak, sk = _secret("UPBIT_ACCESS_KEY"), _secret("UPBIT_SECRET_KEY")
     client = trader.Upbit(ak, sk) if ak and sk else None
     eng = trader.Engine(Path(__file__).parent, client)
+    eng.all_off()                                # 자동매매가 꺼진 채로 시작하므로 코인 버튼도 모두 꺼진 상태로
     eng.start()
     _engines().append(eng)
     return eng
@@ -499,18 +500,26 @@ LIST2_CSS = """<style>
 [class*="st-key-lamt_"] [data-testid="stHorizontalBlock"],[class*="st-key-tbtn_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:6px !important;align-items:center}
 [class*="st-key-lamt_"] [data-testid="stColumn"],[class*="st-key-tbtn_"] [data-testid="stColumn"]{min-width:0 !important;width:auto !important}
 [class*="st-key-tbtn_"] [data-testid="stColumn"]{flex:1 1 0 !important}
-[class*="st-key-tbtn_"] [data-testid="stColumn"]:first-child{flex:0 0 108px !important}
+[class*="st-key-tbtn_"] [data-testid="stColumn"]:nth-child(-n+2){flex:0 0 100px !important}
 [class*="st-key-tbtn_"] [class*="st-key-btn_all_"] button{background:#f4f5f7 !important;border-color:#c9ced6 !important}
 [class*="st-key-tbtn_"] [class*="st-key-btn_all_"] button p{color:#555 !important}
-@media (max-width:600px){[class*="st-key-tbtn_"] [data-testid="stColumn"]:first-child{flex:0 0 64px !important}}
+@media (max-width:600px){[class*="st-key-tbtn_"] [data-testid="stColumn"]:nth-child(-n+2){flex:0 0 52px !important}}
 [class*="st-key-lamt_"]{background:#fff5f5;border:1px solid #f3c9cb;border-radius:8px;padding:6px 10px}
 [class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(1){flex:0 0 auto !important}
-[class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(2){flex:0 1 190px !important}
-[class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(3){flex:0 0 auto !important}
-[class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(4){flex:1 1 auto !important}
-.bkinfo{font-size:13px;color:#666}.bkinfo b{color:#e5484d}
+[class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(2),[class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(4){flex:0 0 40px !important}
+[class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(3){flex:0 0 110px !important}
+[class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(5){flex:1 1 auto !important}
 @media (max-width:600px){[class*="st-key-lamt_"] [data-testid="stHorizontalBlock"]{flex-wrap:wrap !important}
- [class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(4){flex:1 1 100% !important}}
+ [class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(5){flex:1 1 100% !important}}
+.bkinfo{font-size:13px;color:#666}.bkinfo b{color:#e5484d}
+.bkval{font-size:17px;font-weight:700;color:#e5484d;text-align:center;white-space:nowrap}.bkval.mt{color:#999;font-size:15px}
+[class*="st-key-bkm_"] button,[class*="st-key-bkp_"] button{min-height:34px;padding:0 !important;font-weight:700}
+[class*="st-key-bkm_"] button p,[class*="st-key-bkp_"] button p{font-size:18px !important}
+.offnote{font-size:13px;color:#8a5a00;background:#fff4dc;border:1px solid #f1d9a6;border-radius:8px;padding:6px 10px}
+[class*="st-key-tbtn_"] button:disabled{opacity:.45}
+[class*="st-key-btn_allon_"] button{background:#f4f5f7 !important;border-color:#c9ced6 !important}
+[class*="st-key-tbtn_"] [class*="st-key-btn_allon_"] button p{color:#333 !important}
+
 [class*="st-key-tbtn_"] button{padding:6px 4px !important;min-height:42px;background:#fff !important}
 [class*="st-key-tbtn_"] button p{font-size:14px !important;font-weight:600;line-height:1.3;white-space:normal !important;word-break:keep-all}
 /* 버튼 글씨 색: 자동매도 파랑 · 중간자동매도 검정 · 자동매수 빨강 */
@@ -565,6 +574,33 @@ def _on_row(m):
 
 
 DEFAULT_BUY_KRW = 10_000      # 자동매수 1회 금액을 아직 안 정했으면 이 금액으로 시작 (아래 [자동매매] 칸에서 바꿈)
+
+
+BUY_STEP = 5_000              # [−] [+] 한 번에 바뀌는 금액
+
+
+def _on_amount_step(step):
+    """자동매수 1회 금액 [−] / [+] (모든 코인 공통)"""
+    eng = get_engine()
+    cur = int(eng.snapshot().get("buy_krw") or 0)
+    if not cur:
+        new = DEFAULT_BUY_KRW if step > 0 else trader.MIN_ORDER_KRW
+    else:
+        new = max(trader.MIN_ORDER_KRW, cur + step)
+    eng.set_buy_krw(new)
+
+
+def _on_click_all(m, kr):
+    """이 코인의 자동매도·중간자동매도·자동매수를 모두 켬"""
+    eng = get_engine()
+    if not (eng.snapshot().get("buy_krw") or 0) >= trader.MIN_ORDER_KRW:
+        eng.set_buy_krw(DEFAULT_BUY_KRW)
+    rule = eng.snapshot()["rules"].get(m, {})
+    for k in ("up", "mid", "low"):
+        if not rule.get(k):
+            note = eng.toggle(m, k, kr)
+            if note:
+                st.session_state.setdefault("trade_msgs", []).append(note)
 
 
 def _on_cancel_all(m, kr):
@@ -635,17 +671,6 @@ def _hold_box(eng, acc, m, sym, close) -> str:
     return f'<div class="hbox"><div class="plan">{tag}{plan}</div><div class="hgrid">{grid}</div></div>'
 
 
-def _save_buy_amount(eng, v):
-    """자동매수 1회 금액 저장 (모든 코인 공통) 후 화면을 다시 그림"""
-    v = int(v or 0)
-    note = eng.set_buy_krw(v)
-    if 0 < v < trader.MIN_ORDER_KRW:
-        note = f"자동매수 1회 금액은 {trader.MIN_ORDER_KRW:,}원 이상이어야 해요. " + (note or "")
-    if note:
-        st.session_state.setdefault("trade_msgs", []).append(note.strip())
-    st.rerun()
-
-
 def _coin_panel(eng, acc, m, kr, sym, close, rule):
     """펼쳐진 칸: 코인·현재가 / 곡선 방향 / 상한·곡선·하한 / 보유·진행 / 매수 금액 / 버튼 3개"""
     b = rule.get("bands")                                   # 엔진이 마지막으로 계산한 값 (켜져 있을 때)
@@ -677,41 +702,48 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
         if _locked():
             _password_box()
             return
+        on_all = bool(eng.snapshot()["enabled"])            # 맨 위 [자동매매]가 켜져 있어야 버튼을 쓸 수 있음
+        off_tip = "먼저 맨 위 [○ 자동매매 꺼짐]을 눌러 자동매매를 켜 주세요"
+        if not on_all:
+            st.markdown('<div class="offnote">⏸ 자동매매가 꺼져 있어서 버튼을 누를 수 없어요. '
+                        '맨 위 <b>[○ 자동매매 꺼짐]</b>을 눌러 켜 주세요.</div>', unsafe_allow_html=True)
         with st.container(key=f"tbtn_{m}"):
-            cols = st.columns(4)
+            cols = st.columns(5)
             any_on = any(rule.get(k) for k in ("up", "mid", "low"))
             cols[0].button("모두 취소", key=f"btn_all_{m}", width="stretch", on_click=_on_cancel_all, args=(m, kr),
-                           help="이 코인의 자동매도 · 중간자동매도 · 자동매수를 한 번에 모두 끕니다" if any_on
-                           else "켜져 있는 버튼이 없어요")
-            for col, k in zip(cols[1:], ("up", "mid", "low")):
+                           disabled=not on_all,
+                           help=(off_tip if not on_all else "이 코인의 자동매도 · 중간자동매도 · 자동매수를 한 번에 모두 끕니다"
+                                 if any_on else "켜져 있는 버튼이 없어요"))
+            cols[1].button("모두 클릭", key=f"btn_allon_{m}", width="stretch", on_click=_on_click_all, args=(m, kr),
+                           disabled=not on_all,
+                           help=off_tip if not on_all else "이 코인의 자동매도 · 중간자동매도 · 자동매수를 한 번에 모두 켭니다")
+            for col, k in zip(cols[2:], ("up", "mid", "low")):
                 is_on = bool(rule.get(k))
                 val = f"({px(b[k])})" if b else ""                 # 자동매도(매도가능 값) · 중간자동매도(중간값) · 자동매수(매수가능 값)
                 label = f"{BTN_LABEL[k]}{val}" + (" 취소" if is_on else "")
-                col.button(label, key=f"btn_{k}_{m}",
+                col.button(label, key=f"btn_{k}_{m}", disabled=not on_all,
                            type="primary" if is_on else "secondary", width="stretch",
-                           on_click=_on_toggle, args=(m, k, kr), help=BTN_HELP[k])
-        # ── 자동매수 1회 금액 (모든 코인 공통) — 여기서 바로 바꿈 ──
+                           on_click=_on_toggle, args=(m, k, kr), help=off_tip if not on_all else BTN_HELP[k])
+        # ── 자동매수 1회 금액 (모든 코인 공통): [−] 금액 [+] 버튼 — 입력칸이 아니라 버튼이라 값이 저절로 바뀌지 않음 ──
         bk = int(eng.snapshot().get("buy_krw") or 0)
         krw = (acc or {}).get("KRW", {}).get("balance") if acc is not None else None
         with st.container(key=f"lamt_{m}"):
-            c0, c1, c2, c3 = st.columns([1.25, 1.6, 0.25, 3], vertical_alignment="center")
+            c0, c1, c2, c3, c4 = st.columns([1.25, 0.45, 1.1, 0.45, 3], vertical_alignment="center")
             c0.markdown('<div style="font-size:14px;font-weight:600;color:#e5484d;white-space:nowrap">자동매수 1회 금액</div>',
                         unsafe_allow_html=True)
-            # 칸 이름(key)에 지금 금액을 넣어 둠 → 다른 곳에서 금액이 바뀌면 칸이 새로 만들어져 항상 지금 값을 보여 줌.
-            # 버튼을 누를 때 예전 값이 따라 들어와 자동매수가 꺼졌다 켜지는 일이 없도록 콜백(on_change)은 쓰지 않음
-            nv = c1.number_input("자동매수 1회 금액", min_value=0, step=5000, value=bk, key=f"bk_{m}_{bk}",
-                                 label_visibility="collapsed",
-                                 help="모든 코인 공통. − / + 는 5,000원씩. 숫자를 직접 쓰고 Enter를 눌러도 돼요. (최소 5,000원)")
-            c2.markdown('<div style="font-size:14px">원</div>', unsafe_allow_html=True)
+            c1.button("−", key=f"bkm_{m}", width="stretch", on_click=_on_amount_step, args=(-BUY_STEP,),
+                      disabled=not on_all or bk <= trader.MIN_ORDER_KRW, help="5,000원 내리기 (최소 5,000원)")
+            c2.markdown(f'<div class="bkval">{bk:,}원</div>' if bk else '<div class="bkval mt">미정</div>',
+                        unsafe_allow_html=True)
+            c3.button("+", key=f"bkp_{m}", width="stretch", on_click=_on_amount_step, args=(BUY_STEP,),
+                      disabled=not on_all, help="5,000원 올리기")
             if not bk:
-                info = f"아직 0원이에요 · 자동매수를 누르면 {DEFAULT_BUY_KRW:,}원으로 시작해요"
+                info = f"자동매수를 누르면 {DEFAULT_BUY_KRW:,}원으로 시작해요 · 모든 코인 공통"
             elif krw is not None:
-                info = f"예수금 {krw:,.0f}원으로 <b>{int(krw // bk)}번</b> 살 수 있어요"
+                info = f"예수금 {krw:,.0f}원으로 <b>{int(krw // bk)}번</b> 살 수 있어요 · 모든 코인 공통"
             else:
                 info = "모든 코인에 같은 금액이 적용돼요"
-            c3.markdown(f'<div class="bkinfo">{info}</div>', unsafe_allow_html=True)
-        if int(nv or 0) != bk:                              # 사용자가 금액을 실제로 바꿨을 때만 저장
-            _save_buy_amount(eng, nv)
+            c4.markdown(f'<div class="bkinfo">{info}</div>', unsafe_allow_html=True)
         for msg in st.session_state.pop("_panel_msgs", []):
             st.warning(msg)
 
@@ -783,6 +815,7 @@ def _real_dialog():
                 "모의 모드에서 원하는 대로 사고파는지 충분히 확인하셨나요?")
     c1, c2 = st.columns(2)
     if c1.button("실전으로 바꾸기", type="primary", width="stretch"):
+        get_engine().all_off()
         err = get_engine().set_mock(False)
         if err:
             st.error(err)
@@ -798,6 +831,7 @@ def _on_mode(want_mock: bool):
     if want_mock == eng.snapshot()["mock"]:
         return
     if want_mock:
+        eng.all_off()                                        # 모드를 바꾸면 자동매매가 꺼지므로 버튼도 모두 끔
         err = eng.set_mock(True)
         if err:
             st.session_state.setdefault("trade_msgs", []).append(err)
@@ -806,9 +840,13 @@ def _on_mode(want_mock: bool):
 
 
 def _on_onoff():
-    """[자동매매 켜기/끄기] 버튼: 누를 때마다 켜짐 ↔ 꺼짐"""
+    """[자동매매 켜기/끄기] 버튼: 누를 때마다 켜짐 ↔ 꺼짐. 끄면 모든 코인의 버튼도 모두 꺼짐"""
     eng = get_engine()
-    eng.set_enabled(not eng.snapshot()["enabled"])
+    if eng.snapshot()["enabled"]:
+        eng.all_off()                                        # 자동매도·중간자동매도·자동매수 모두 끔 (걸린 주문도 취소)
+        eng.set_enabled(False)
+    else:
+        eng.set_enabled(True)
 
 
 def top_controls():

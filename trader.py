@@ -295,9 +295,22 @@ class Engine:
 
     # ── 저장·기록 ──
     def _save(self):
+        """설정·상태를 파일에 저장. Windows에서는 백신·검색 프로그램이 파일을 잠깐 잡고 있으면
+        '액세스가 거부되었습니다'가 날 수 있어서, 몇 번 다시 시도하고 그래도 안 되면 바로 덮어씀.
+        저장이 안 돼도 프로그램은 멈추지 않음 (다음 저장 때 다시 시도)"""
+        text = json.dumps(self.data, ensure_ascii=False, indent=1)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.path)
+        for i in range(6):
+            try:
+                tmp.write_text(text, encoding="utf-8")
+                tmp.replace(self.path)
+                return
+            except OSError:
+                time.sleep(0.05 * (i + 1))
+        try:
+            self.path.write_text(text, encoding="utf-8")
+        except OSError as e:
+            self.last_error = f"{time.strftime('%H:%M:%S')} 설정 파일 저장 실패: {e}"
 
     def _log(self, r: dict, action: str, price=None, volume=None, msg: str = ""):
         row = {"시각": time.strftime("%m-%d %H:%M:%S"), "코인": r.get("name") or r["market"],
@@ -392,6 +405,14 @@ class Engine:
             self._log(r, f"{BTN_NAME[key]} {'실행' if on else '취소'}")
             self._save()
             return note
+
+    def all_off(self):
+        """모든 코인의 자동매도·중간자동매도·자동매수를 끔 (걸려 있던 주문도 취소)"""
+        with self.lock:
+            for m, r in list(self.data["rules"].items()):
+                for k in BTN:
+                    if r.get(k):
+                        self.toggle(m, k)
 
     def reset(self, market: str | None = None):
         with self.lock:
