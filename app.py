@@ -431,6 +431,9 @@ LIST2_CSS = """<style>
 [class*="st-key-lbtn_"]{position:absolute !important;inset:0;z-index:3}
 [class*="st-key-lbtn_"] div,[class*="st-key-lbtn_"] button{width:100% !important;height:100% !important}
 [class*="st-key-lbtn_"] button{opacity:0;cursor:pointer;min-height:0 !important}
+.cbtn{margin-left:auto;display:inline-block;padding:6px 14px;font-size:14px;font-weight:500;white-space:nowrap;
+ border:1px solid #c9ced6;border-radius:8px;background:#fff;color:#31333f !important;text-decoration:none !important}
+.cbtn:hover{border-color:#1f4fa8;color:#1f4fa8 !important}
 [class*="st-key-lpanel_"]{background:#fff;border-top:1px solid #e3e6ea;padding:10px 12px 12px 12px;gap:8px !important}
 [class*="st-key-lamt_"] [data-testid="stHorizontalBlock"],[class*="st-key-tbtn_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:6px !important;align-items:center}
 [class*="st-key-lamt_"] [data-testid="stColumn"],[class*="st-key-tbtn_"] [data-testid="stColumn"]{min-width:0 !important;width:auto !important}
@@ -440,9 +443,10 @@ LIST2_CSS = """<style>
 @media (max-width:600px){[class*="st-key-tbtn_"] button p{font-size:12.5px !important}}
 </style>"""
 
-BTN_HELP = {"up": "현재가가 곡선상한(매도선)에 닿으면 남은 것 전부 매도",
-            "mid": "곡선이 하락 중일 때 현재가가 곡선(중간선)에 닿으면 절반 매도",
-            "low": "현재가가 곡선하한(매수선)에 닿으면 매수 금액만큼 매수"}
+BTN_HELP = {"up": "현재가가 매도가능(곡선상한)에 닿으면 남은 것 전부 매도",
+            "mid": "추세가 하락 중일 때 현재가가 중간값(곡선)에 닿으면 절반 매도",
+            "low": "현재가가 매수가능(곡선하한)에 닿으면 '자동매수 1회 금액'만큼 매수"}
+BTN_TAG = {"up": "매도", "mid": "중간", "low": "매수"}       # 리스트 줄에 붙는 작은 표시
 
 
 def _trade_ctx():
@@ -482,12 +486,6 @@ def _on_toggle(m, k, kr):
         st.session_state.setdefault("trade_msgs", []).append(note)
 
 
-def _on_amount(m, kr, key):
-    note = get_engine().set_amount(m, kr, st.session_state.get(key))
-    if note:
-        st.session_state.setdefault("trade_msgs", []).append(note)
-
-
 def _coin_panel(eng, acc, m, kr, sym, close, rule):
     """펼쳐진 칸: 코인·현재가 / 곡선 방향 / 상한·곡선·하한 / 보유·진행 / 매수 금액 / 버튼 3개"""
     b = rule.get("bands")                                   # 엔진이 마지막으로 계산한 값 (켜져 있을 때)
@@ -505,11 +503,11 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
     if b:
         arrow = ('<span style="color:#1a56db">▼ 하락</span>' if b["falling"]
                  else '<span style="color:#e5484d">▲ 상승</span>')
-        lines = (f'<div style="font-size:14px;margin-top:4px">곡선 {arrow}</div>'
-                 f'<div style="font-size:14px"><span style="color:#1a56db">상한 {px(b["up"])}</span> · '
-                 f'곡선 {px(b["mid"])} · <span style="color:#e5484d">하한 {px(b["low"])}</span></div>')
+        lines = (f'<div style="font-size:14px;margin-top:4px">추세 {arrow}</div>'
+                 f'<div style="font-size:14px"><span style="color:#1a56db">매도가능 {px(b["up"])}</span> · '
+                 f'중간값 {px(b["mid"])} · <span style="color:#e5484d">매수가능 {px(b["low"])}</span></div>')
     else:
-        lines = '<div style="font-size:13px;color:#999;margin-top:4px">곡선 계산 전입니다 (잠시 후 새로고침)</div>'
+        lines = '<div style="font-size:13px;color:#999;margin-top:4px">추세 계산 전입니다 (잠시 후 새로고침)</div>'
     stt = rule.get("state") or "대기"
     stt += f' · {rule["msg"]}' if rule.get("msg") else ""
     chart = html.escape(link(code=m, name=kr, x="upbit"))
@@ -518,24 +516,16 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
             f'<div style="display:flex;align-items:baseline;gap:8px">'
             f'<div style="font-size:17px;font-weight:700">{html.escape(kr)} '
             f'<span style="font-size:13px;color:#999;font-weight:400">{html.escape(sym)}</span> · {px(close)}원</div>'
-            f'<a href="{chart}" target="_self" style="margin-left:auto;font-size:13px;white-space:nowrap">📈 차트 보기</a></div>'
+            f'<a class="cbtn" href="{chart}" target="_self">차트 보기</a></div>'
             f'{lines}<div style="font-size:13px;color:#666;margin-top:2px">보유 {"-" if held is None else f"{held:g}"} · '
             f'진행: {html.escape(stt)}</div>', unsafe_allow_html=True)
         if _locked():
             _password_box()
             return
-        ak = f"krw_{m}"
-        with st.container(key=f"lamt_{m}"):
-            c0, c1, c2 = st.columns([0.9, 3, 0.35], vertical_alignment="center")
-            c0.markdown('<div style="font-size:14px;color:#555;white-space:nowrap">매수 금액</div>', unsafe_allow_html=True)
-            c1.number_input("매수 금액(원)", min_value=0, step=10000, value=int(rule.get("krw") or 0),
-                            key=ak, on_change=_on_amount, args=(m, kr, ak), label_visibility="collapsed",
-                            help="곡선하한에서 얼마어치 살지 (최소 5,000원)")
-            c2.markdown('<div style="font-size:14px">원</div>', unsafe_allow_html=True)
         with st.container(key=f"tbtn_{m}"):
             for col, k in zip(st.columns(3), ("up", "mid", "low")):
                 is_on = bool(rule.get(k))
-                col.button(f"{trader.BTN_NAME[k]} {'취소' if is_on else '실행'}", key=f"btn_{k}_{m}",
+                col.button(f"{trader.BTN_NAME[k]} 취소" if is_on else trader.BTN_NAME[k], key=f"btn_{k}_{m}",
                            type="primary" if is_on else "secondary", width="stretch",
                            on_click=_on_toggle, args=(m, k, kr), help=BTN_HELP[k])
 
@@ -577,8 +567,8 @@ def trade_list(rows, sig, hm=None):
             k = "eq" if pct is None else ("up" if pct > 0 else ("dn" if pct < 0 else "eq"))
             arrow = "" if not pct else ("▲ " if pct > 0 else "▼ ")
             pct_t = "-" if pct is None else f"{pct:+.2f}%" if pct else "0.00%"
-            ons = "".join(f'<span class="on">{"상" if b_ == "up" else "곡" if b_ == "mid" else "하"}</span>'
-                          for b_ in ("up", "mid", "low") if rule.get(b_))          # 실행 중인 버튼 표시
+            ons = "".join(f'<span class="on">{BTN_TAG[b_]}</span>'
+                          for b_ in ("up", "mid", "low") if rule.get(b_))          # 켜져 있는 버튼 표시
             cls = "cl-row" + (" open" if opened == m else (" ev" if i % 2 == 0 else ""))
             with st.container(key=f"lrow_{m}"):
                 st.markdown(
@@ -610,7 +600,7 @@ def trade_panel():
     c1, c2, c3 = st.columns(3)
     c1.metric("예수금 (주문 가능)", f"{krw.get('balance', 0):,.0f}원" if acc else "-",
               help=f"주문 중 {krw.get('locked', 0):,.0f}원은 빠진 값입니다." if acc else None)
-    c2.metric("곡선하한 매수 예정", f"{eng.planned_krw():,.0f}원", help="곡선하한 '실행' 중이고 아직 사지 않은 코인들의 매수 금액 합")
+    c2.metric("자동매수 예정", f"{eng.planned_krw():,.0f}원", help="자동매수가 켜져 있고 아직 사지 않은 코인들의 매수 금액 합")
     c3.metric("상태", ("🟢 켜짐" if snap["enabled"] else "⚪ 꺼짐") + (" · 모의" if snap["mock"] else " · 실전"))
     if eng.client is None:
         st.info("업비트 API 키가 아직 없어서 **모의 모드**로만 동작합니다. (실제 주문 없이 '체결됐다고 치고' 기록만 남겨요)")
@@ -628,13 +618,23 @@ def trade_panel():
             err = eng.set_mock(False)
             st.error(err) if err else st.rerun()
     on = m2.toggle("자동매매 켜기", value=snap["enabled"], key=f"trade_on_{snap['enabled']}",
-                   help="켜 두면 3초마다 현재가를 확인해서, '실행' 버튼이 켜진 코인만 조건이 맞을 때 주문합니다.")
+                   help="켜 두면 3초마다 현재가를 확인해서, 버튼이 켜진 코인만 조건이 맞을 때 주문합니다.")
     if on != snap["enabled"]:
         eng.set_enabled(on)
         st.rerun()
-    st.caption("곡선하한 = 매수 · 곡선 = 곡선이 하락 중일 때 절반 매도 (상승 중이면 건너뜀) · 곡선상한 = 남은 것 전부 매도. "
-               "다 팔고 나서도 곡선하한이 '실행'이면 다음 하한에서 다시 삽니다. "
-               "곡선하한 없이 곡선/곡선상한만 실행하면 이미 가진 코인을 팝니다.")
+    def _on_buy_krw():
+        note = eng.set_buy_krw(st.session_state.get("buy_krw"))
+        if note:
+            st.session_state.setdefault("trade_msgs", []).append(note)
+    st.number_input("자동매수 1회 금액(원) — 모든 코인 공통", min_value=0, step=10000,
+                    value=int(snap.get("buy_krw") or 0), key="buy_krw", on_change=_on_buy_krw,
+                    help="자동매수가 켜진 코인이 매수가능 값에 닿으면 이 금액만큼 삽니다. (최소 5,000원)")
+    if acc and snap.get("buy_krw"):
+        st.caption(f"예수금의 약 {snap['buy_krw'] / max(krw.get('balance', 0), 1) * 100:.1f}% · 예수금으로 약 "
+                   f"{int(krw.get('balance', 0) // snap['buy_krw'])}번 살 수 있어요")
+    st.caption("자동매수 = 매수가능 값에서 매수 · 중간자동매도 = 추세가 하락 중일 때 중간값에서 절반 매도 (상승 중이면 건너뜀) · "
+               "자동매도 = 매도가능 값에서 남은 것 전부 매도. 다 팔고 나서도 자동매수가 켜져 있으면 다음 매수가능 값에서 다시 삽니다. "
+               "자동매수 없이 자동매도/중간자동매도만 켜면 이미 가진 코인을 팝니다.")
     if st.button("↺ 완료·오류 상태 초기화", key="trade_reset"):
         eng.reset()
         st.rerun()
@@ -652,10 +652,10 @@ def trade_panel():
                 return px(r["bands"][k]) if r.get("bands") else "-"
             st.dataframe(pd.DataFrame([{
                 "코인": r.get("name"),
-                "실행 중": " ".join(trader.BTN_NAME[k] for k in ("up", "mid", "low") if r.get(k)) or "-",
+                "켜진 버튼": " ".join(trader.BTN_NAME[k] for k in ("up", "mid", "low") if r.get(k)) or "-",
                 "상태": r.get("state"), "현재가": px(eng.last_prices.get(r["market"])),
-                "곡선": ("▼하락" if r["bands"]["falling"] else "▲상승") if r.get("bands") else "-",
-                "상한": bv(r, "up"), "곡선값": bv(r, "mid"), "하한": bv(r, "low"),
+                "추세": ("▼하락" if r["bands"]["falling"] else "▲상승") if r.get("bands") else "-",
+                "매도가능": bv(r, "up"), "중간값": bv(r, "mid"), "매수가능": bv(r, "low"),
                 "보유(이 프로그램)": r.get("held") or 0, "메모": r.get("msg", "")} for r in act]),
                 hide_index=True, width="stretch")
         if s["log"]:
@@ -837,7 +837,7 @@ if not qp.get("code"):
         with ph.container():                                  # ② 버튼 줄 + 누르면 펼쳐지는 리스트
             st.markdown(build(sig, _tm, table=False), unsafe_allow_html=True)
             trade_list(rows, sig, hm)
-        st.caption("※ 코인을 누르면 그 아래에 자동매매 칸이 펼쳐집니다. 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. "
+        st.caption("※ 코인을 누르면 그 아래에 자동매매 버튼이 펼쳐집니다. 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. "
                    "(시간)은 그 값이 나온 한국시간이며, 시가 시간은 거래소의 하루 시작 시각입니다.")
         trade_panel()
     else:

@@ -2,10 +2,10 @@
 
 화면(app.py)과 따로 떨어진 '두뇌' 부분입니다. streamlit 없이도 동작합니다.
 매매 기준은 차트의 세 선입니다 (app.py 차트와 똑같은 계산):
-  · 곡선하한(매수선)에서 매수
-  · 곡선이 하락 중이면 → 곡선(중간선)에서 절반 매도, 곡선상한(매도선)에서 나머지 전부 매도
-  · 곡선이 상승 중이면 → 곡선에서는 팔지 않고, 곡선상한에서 전부 매도
-코인마다 [곡선상한] [곡선] [곡선하한] 버튼을 '실행'으로 켜 둔 것만 동작합니다.
+  · 자동매수     : 매수가능선(곡선하한)에서 매수
+  · 중간자동매도 : 추세가 하락 중일 때 중간값(곡선)에서 절반 매도 (상승 중이면 건너뜀)
+  · 자동매도     : 매도가능선(곡선상한)에서 남은 것 전부 매도
+코인마다 [자동매도] [중간자동매도] [자동매수] 버튼을 켜 둔 것만 동작합니다.
 - 모의 모드: 실제 주문 없이 '체결됐다고 치고' 기록만 남김 (처음엔 꼭 모의로 확인!)
 - 설정과 진행 상태는 trade_state.json 에 저장 (다시 켜면 안전을 위해 '자동매매 꺼짐'으로 시작)
 """
@@ -262,7 +262,7 @@ def closes(market: str, days: int = CALC_DAYS) -> np.ndarray:
 #   곡선상한(up)  실행 → 현재가가 곡선상한에 닿으면 남은 것 전부 매도
 # 곡선이 '상승' 중일 때는 곡선(mid)에서 팔지 않고 상한까지 들고 감
 BTN = ("low", "mid", "up")
-BTN_NAME = {"low": "곡선하한", "mid": "곡선", "up": "곡선상한"}
+BTN_NAME = {"low": "자동매수", "mid": "중간자동매도", "up": "자동매도"}
 WAIT, BUYING, HOLD, SELLING, DONE, ERROR = "대기", "매수주문", "보유", "매도주문", "완료", "오류"
 PENDING = (BUYING, SELLING)
 
@@ -279,7 +279,7 @@ class Engine:
         self.last_prices: dict = {}
         self.last_tick = 0.0
         self.last_error = ""
-        self.data = {"enabled": False, "mock": True, "rules": {}, "log": []}
+        self.data = {"enabled": False, "mock": True, "buy_krw": None, "rules": {}, "log": []}
         if self.path.exists():
             try:
                 old = json.loads(self.path.read_text(encoding="utf-8"))
@@ -354,25 +354,32 @@ class Engine:
                 self._save()
             return ""
 
-    def set_amount(self, market: str, name: str, krw) -> str:
-        """매수 금액(원) 저장"""
+    def buy_krw(self, r: dict | None = None) -> float:
+        """자동매수 1회 금액: 코인에 따로 정한 금액이 있으면 그것, 없으면 공통 금액"""
+        return (r or {}).get("krw") or self.data.get("buy_krw") or 0.0
+
+    def set_buy_krw(self, krw) -> str:
+        """모든 코인 공통 '자동매수 1회 금액(원)'"""
         with self.lock:
-            r = self._rule(market, name)
-            r["krw"] = _f(krw)
-            if r["low"] and (not r["krw"] or r["krw"] < MIN_ORDER_KRW):
-                r["low"] = False
-                self._save()
-                return f"{r['name']}: 매수 금액이 {MIN_ORDER_KRW:,}원보다 작아 곡선하한 매수를 취소했습니다."
+            self.data["buy_krw"] = _f(krw)
+            note = ""
+            if not self.data["buy_krw"] or self.data["buy_krw"] < MIN_ORDER_KRW:
+                off = [r for r in self.data["rules"].values() if r.get("low") and not r.get("krw")
+                       and r.get("state") not in PENDING]
+                for r in off:
+                    r["low"] = False
+                if off:
+                    note = f"자동매수 금액이 {MIN_ORDER_KRW:,}원보다 작아 자동매수를 취소했습니다: " + ", ".join(r["name"] for r in off)
             self._save()
-            return ""
+            return note
 
     def toggle(self, market: str, key: str, name: str = "") -> str:
         """버튼 한 번 누름: 실행 ↔ 취소. 돌려주는 값 = 알림 문장(없으면 빈칸)"""
         with self.lock:
             r = self._rule(market, name)
             on = not r.get(key)
-            if on and key == "low" and (not r.get("krw") or r["krw"] < MIN_ORDER_KRW):
-                return f"{r['name']}: 먼저 매수 금액을 {MIN_ORDER_KRW:,}원 이상 넣어 주세요."
+            if on and key == "low" and self.buy_krw(r) < MIN_ORDER_KRW:
+                return f"먼저 아래 [자동매매] 칸에서 '자동매수 1회 금액'을 {MIN_ORDER_KRW:,}원 이상 넣어 주세요."
             r[key] = on
             note = ""
             if not on and r.get("state") in PENDING:          # 그 버튼으로 걸린 주문이면 취소
@@ -395,7 +402,7 @@ class Engine:
 
     def planned_krw(self) -> float:
         with self.lock:
-            return sum(r.get("krw") or 0 for r in self.data["rules"].values()
+            return sum(self.buy_krw(r) for r in self.data["rules"].values()
                        if r.get("low") and r.get("state") == WAIT)
 
     # ── 백그라운드 실행 ──
@@ -433,7 +440,7 @@ class Engine:
                 try:
                     y = self.closes_fn(r["market"])
                     if len(y) < 60:
-                        r["msg"] = "일봉이 60개보다 적어 곡선을 계산할 수 없습니다"
+                        r["msg"] = "일봉이 60개보다 적어 추세를 계산할 수 없습니다"
                         continue
                     y[-1] = p                                   # 오늘 캔들 = 지금 가격 (차트와 같음)
                     b = bands_now(y)
@@ -456,24 +463,24 @@ class Engine:
                     r["msg"] = ""
                     return
                 price = fit_price(m, b["low"], "bid", p)
-                vol = fit_volume((r.get("krw") or 0) / float(price))
+                vol = fit_volume(self.buy_krw(r) / float(price))
                 cost = float(price * vol)
                 if cost < MIN_ORDER_KRW:
                     raise UpbitError(f"주문 금액 {cost:,.0f}원 < 최소 {MIN_ORDER_KRW:,}원")
                 if mock:
-                    r.update(state=HOLD, held=float(vol), half_done=False, msg=f"곡선하한 {fmt_dec(price)}원에 매수(모의)")
-                    self._log(r, "곡선하한 매수 체결(모의)", float(price), float(vol))
+                    r.update(state=HOLD, held=float(vol), half_done=False, msg=f"자동매수 {fmt_dec(price)}원(모의)")
+                    self._log(r, "자동매수 체결(모의)", float(price), float(vol))
                     return
                 krw = (acc or {}).get("KRW", {}).get("balance", 0.0)
                 if krw < cost * (1 + FEE):
                     r["msg"] = f"예수금 부족 (필요 {cost * (1 + FEE):,.0f}원 / 있음 {krw:,.0f}원) — 기다리는 중"
                     return
                 o = self.client.limit_order(m, "bid", vol, price)
-                r.update(state=BUYING, order=o["uuid"], kind="low", msg=f"곡선하한 매수 주문 {fmt_dec(price)}원")
-                self._log(r, "곡선하한 매수 주문", float(price), float(vol))
+                r.update(state=BUYING, order=o["uuid"], kind="low", msg=f"자동매수 주문 {fmt_dec(price)}원")
+                self._log(r, "자동매수 주문", float(price), float(vol))
             elif r.get("mid") or r.get("up"):               # 하한 매수 없이 → 이미 가진 코인을 팔기
                 if mock:
-                    r["msg"] = "모의 모드에서는 곡선하한으로 산 코인만 팔 수 있어요"
+                    r["msg"] = "모의 모드에서는 자동매수로 산 코인만 팔 수 있어요"
                     return
                 bal = (acc or {}).get(m[4:], {}).get("balance", 0.0)
                 if bal * p >= MIN_ORDER_KRW:
@@ -489,7 +496,7 @@ class Engine:
             ex = float(o.get("executed_volume") or 0)
             if o["state"] == "done":
                 r.update(state=HOLD, held=ex, half_done=False, order=None, kind=None, msg=f"매수 체결 {ex:g}개")
-                self._log(r, "곡선하한 매수 체결", _f(o.get("price")), ex)
+                self._log(r, "자동매수 체결", _f(o.get("price")), ex)
             elif o["state"] == "cancel":
                 r.update(state=HOLD if ex > 0 else WAIT, held=ex, order=None, kind=None,
                          msg="매수 주문이 취소됨" + (f" ({ex:g}개만 체결)" if ex > 0 else ""))
@@ -509,16 +516,16 @@ class Engine:
             elif r.get("mid") and b["falling"] and not r.get("half_done") and p >= b["mid"]:
                 kind, target, vol = "mid", b["mid"], held / 2                 # 절반 매도
             if kind is None:
-                r["msg"] = "보유 중 · 곡선 " + ("하락" if b["falling"] else "상승")
+                r["msg"] = "보유 중 · 추세 " + ("하락" if b["falling"] else "상승")
                 return
             price = fit_price(m, target, "ask", p)
             vol = fit_volume(vol)
             if float(price * vol) < MIN_ORDER_KRW:
                 if kind == "mid":
-                    r.update(half_done=True, msg="절반이 최소 주문 금액보다 작아 곡선 절반 매도는 건너뜀")
+                    r.update(half_done=True, msg="절반이 최소 주문 금액보다 작아 중간자동매도는 건너뜀")
                     return
                 raise UpbitError(f"매도 금액 {float(price * vol):,.0f}원 < 최소 {MIN_ORDER_KRW:,}원")
-            what = "곡선 절반 매도" if kind == "mid" else "곡선상한 전체 매도"
+            what = "중간자동매도(절반)" if kind == "mid" else "자동매도(전체)"
             if mock:
                 self._log(r, what + " 체결(모의)", float(price), float(vol))
                 self._sold(r, kind, float(vol), f"{what} {fmt_dec(price)}원(모의)")
@@ -533,7 +540,7 @@ class Engine:
                 return
             o = self.client.get_order(r["order"])
             ex = float(o.get("executed_volume") or 0)
-            what = "곡선 절반 매도" if r.get("kind") == "mid" else "곡선상한 전체 매도"
+            what = "중간자동매도(절반)" if r.get("kind") == "mid" else "자동매도(전체)"
             if o["state"] == "done":
                 self._log(r, what + " 체결", _f(o.get("price")), ex)
                 self._sold(r, r.get("kind"), ex, f"{what} 체결 {ex:g}개")
@@ -556,7 +563,7 @@ class Engine:
             r.update(state=HOLD, held=left, half_done=True, order=None, kind=None, msg=msg)
         else:
             r.update(state=self._after_all(r), held=0.0, half_done=False, order=None, kind=None,
-                     msg=msg + (" → 다시 곡선하한 매수 대기" if r.get("low") else ""))
+                     msg=msg + (" → 다시 자동매수 대기" if r.get("low") else ""))
 
     def _cancel(self, r: dict, why: str):
         if self.data["mock"] or not r.get("order"):
