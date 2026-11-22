@@ -25,6 +25,7 @@ import requests
 
 API = "https://api.upbit.com"
 MIN_ORDER_KRW = 5000          # 업비트 원화마켓 최소 주문 금액
+SLIP_TICKS = 2                # 주문 가격: 매수는 매도 1호가보다 2호가 높게, 매도는 매수 1호가보다 2호가 낮게 (+FOK)
 FEE = 0.0005                  # 업비트 기본 수수료 0.05% (예수금 확인할 때 여유분으로 사용)
 INTERVAL = 3                  # 몇 초마다 현재가를 확인할지
 LOG_KEEP = 300                # 화면용 기록은 최근 300개만 보관 (전체 기록은 trade_log.csv)
@@ -92,11 +93,15 @@ class Upbit:
                                   "avg": float(a.get("avg_buy_price") or 0)}
         return out
 
-    def limit_order(self, market: str, side: str, volume: Decimal, price: Decimal) -> dict:
-        """지정가 주문. side = 'bid'(매수) / 'ask'(매도)"""
-        return self._req("POST", "/v1/orders", {
-            "market": market, "side": side, "ord_type": "limit",
-            "volume": fmt_dec(volume), "price": fmt_dec(price)})
+    def limit_order(self, market: str, side: str, volume: Decimal, price: Decimal, tif: str | None = "fok") -> dict:
+        """지정가 주문. side = 'bid'(매수) / 'ask'(매도)
+        tif='fok' (Fill or Kill): 그 가격 안에서 '전부' 체결될 수 있을 때만 체결, 아니면 하나도 체결하지 않고 바로 취소
+        → 일부만 체결돼 5,000원 미만 자투리가 남거나, 주문이 업비트에 걸린 채 남는 일이 없음"""
+        body = {"market": market, "side": side, "ord_type": "limit",
+                "volume": fmt_dec(volume), "price": fmt_dec(price)}
+        if tif:
+            body["time_in_force"] = tif
+        return self._req("POST", "/v1/orders", body)
 
     def get_order(self, uid: str) -> dict:
         return self._req("GET", "/v1/order", {"uuid": uid})
@@ -106,6 +111,15 @@ class Upbit:
 
 
 # ───────────── 시세 (공개) ─────────────
+def quotes(market: str) -> tuple:
+    """지금 호가: (매도 1호가, 매수 1호가) — 매수는 매도 1호가에, 매도는 매수 1호가에 사고팔 수 있음"""
+    r = requests.get(API + "/v1/orderbook", params={"markets": market},
+                     headers={"Accept": "application/json"}, timeout=8)
+    r.raise_for_status()
+    u = r.json()[0]["orderbook_units"][0]
+    return float(u["ask_price"]), float(u["bid_price"])
+
+
 def prices(markets: list) -> dict:
     """{KRW-BTC: 현재가}"""
     if not markets:
@@ -170,6 +184,25 @@ def fit_volume(v: float) -> Decimal:
 def buy_volume(krw: float, price: Decimal) -> Decimal:
     """'krw원어치' 살 수량. 내림하면 5,000원이 4,999.99원이 되어 최소 주문 금액에 걸리므로 올림 (차이는 1원 미만)"""
     return (Decimal(str(krw)) / price).quantize(Decimal("0.00000001"), ROUND_UP)
+
+
+def order_price(market: str, side: str, ask: float, bid: float, now_price: float | None = None) -> Decimal:
+    """바로 체결되도록 부르는 가격. 매수 = 매도 1호가 + 2호가, 매도 = 매수 1호가 - 2호가 (호가 단위에 맞춤)"""
+    base = ask if side == "bid" else bid
+    t = tick_size(market, base, now_price)
+    d = Decimal(str(base)) + (t * SLIP_TICKS if side == "bid" else -t * SLIP_TICKS)
+    if d <= 0:
+        d = t
+    q = (d / t).to_integral_value(ROUND_DOWN if side == "bid" else ROUND_UP)   # 호가 단위에 맞춤
+    return (q * t).normalize()
+
+
+def _avg_price(o: dict):
+    """주문의 실제 평균 체결 가격 (체결 금액 ÷ 체결 수량). 모르면 주문 가격"""
+    ex, funds = _f(o.get("executed_volume")), _f(o.get("executed_funds"))
+    if ex and funds:
+        return funds / ex
+    return _f(o.get("price"))
 
 
 def fmt_dec(d: Decimal) -> str:
@@ -273,7 +306,8 @@ PENDING = (BUYING, SELLING)
 
 
 class Engine:
-    def __init__(self, folder: Path, client: Upbit | None = None, price_fn=prices, closes_fn=closes):
+    def __init__(self, folder: Path, client: Upbit | None = None, price_fn=prices, closes_fn=closes, quote_fn=quotes):
+        self.quote_fn = quote_fn
         self.folder = Path(folder)
         self.path = self.folder / "trade_state.json"
         self.csv = self.folder / "trade_log.csv"
@@ -489,15 +523,23 @@ class Engine:
             if r.get("low"):
                 if p > b["low"]:
                     r["msg"] = ""
-                    r["short"] = False
+                    r["short"] = r["miss"] = False
                     return
-                price = fit_price(m, b["low"], "bid", p)
+                if mock:                                    # 모의: 호가를 못 받으면 매수가능 값으로 계산
+                    try:
+                        ask, bid = self.quote_fn(m)
+                        price = order_price(m, "bid", ask, bid, p)
+                    except Exception:
+                        price = fit_price(m, b["low"], "bid", p)
+                else:
+                    ask, bid = self.quote_fn(m)
+                    price = order_price(m, "bid", ask, bid, p)     # 매도 1호가 + 2호가
                 vol = buy_volume(self.buy_krw(r), price)
                 cost = float(price * vol)
                 if cost < MIN_ORDER_KRW:
                     raise UpbitError(f"주문 금액 {cost:,.0f}원 < 최소 {MIN_ORDER_KRW:,}원")
                 if mock:
-                    r.update(state=HOLD, held=float(vol), half_done=False, msg=f"자동매수 {fmt_dec(price)}원(모의)")
+                    r.update(state=HOLD, held=float(vol), half_done=False, dust=False, msg=f"자동매수 {fmt_dec(price)}원(모의)")
                     self._log(r, "자동매수 체결(모의)", float(price), float(vol))
                     return
                 krw = (acc or {}).get("KRW", {}).get("balance", 0.0)
@@ -514,8 +556,9 @@ class Engine:
                 if acc is not None and "KRW" in acc:           # 같은 3초 안의 다음 코인이 이 돈을 또 쓰지 않게 바로 뺌
                     acc["KRW"]["balance"] = krw - need
                 r["short"] = False
-                r.update(state=BUYING, order=o["uuid"], kind="low", msg=f"자동매수 주문 {fmt_dec(price)}원")
-                self._log(r, "자동매수 주문", float(price), float(vol))
+                r.update(state=BUYING, order=o["uuid"], kind="low", msg=f"자동매수 주문 {fmt_dec(price)}원 (FOK)")
+                if not r.get("miss"):                          # 체결 못 하고 다시 시도하는 중이면 기록을 쌓지 않음
+                    self._log(r, "자동매수 주문", float(price), float(vol), "매도1호가+2호가 · 전량 체결 아니면 취소(FOK)")
             elif r.get("mid") or r.get("up"):               # 하한 매수 없이 → 이미 가진 코인을 팔기
                 if mock:
                     r["msg"] = "모의 모드에서는 자동매수로 산 코인만 팔 수 있어요"
@@ -532,13 +575,16 @@ class Engine:
                 return
             o = self.client.get_order(r["order"])
             ex = float(o.get("executed_volume") or 0)
-            if o["state"] == "done":
-                r.update(state=HOLD, held=ex, half_done=False, order=None, kind=None, msg=f"매수 체결 {ex:g}개")
-                self._log(r, "자동매수 체결", _f(o.get("price")), ex)
-            elif o["state"] == "cancel":
-                r.update(state=HOLD if ex > 0 else WAIT, held=ex, order=None, kind=None,
-                         msg="매수 주문이 취소됨" + (f" ({ex:g}개만 체결)" if ex > 0 else ""))
-                self._log(r, "매수 주문 취소됨", None, ex)
+            if o["state"] in ("done", "cancel") and ex > 0:
+                r.update(state=HOLD, held=ex, half_done=False, order=None, kind=None, miss=False, dust=False,
+                         msg=f"매수 체결 {ex:g}개")
+                self._log(r, "자동매수 체결", _avg_price(o), ex)
+            elif o["state"] in ("done", "cancel"):           # FOK: 그 가격 안에 물량이 모자라 하나도 안 사고 취소됨
+                r.update(state=WAIT, order=None, kind=None,
+                         msg="호가 물량이 모자라 체결 안 됨(FOK 취소) — 3초 뒤 다시 시도")
+                if not r.get("miss"):
+                    r["miss"] = True
+                    self._log(r, "자동매수 체결 안 됨(FOK 취소)", _f(o.get("price")), 0, "다시 시도합니다")
             else:
                 r["msg"] = f"매수 주문 체결 기다리는 중 ({ex:g}개 체결)"
             return
@@ -555,22 +601,39 @@ class Engine:
                 kind, target, vol = "mid", b["mid"], held / 2                 # 절반 매도
             if kind is None:
                 r["msg"] = "보유 중 · 추세 " + ("하락" if b["falling"] else "상승")
+                r["miss"] = False
                 return
-            price = fit_price(m, target, "ask", p)
+            if mock:
+                try:
+                    ask, bid = self.quote_fn(m)
+                    price = order_price(m, "ask", ask, bid, p)
+                except Exception:
+                    price = fit_price(m, target, "ask", p)
+            else:
+                ask, bid = self.quote_fn(m)
+                price = order_price(m, "ask", ask, bid, p)         # 매수 1호가 - 2호가
             vol = fit_volume(vol)
             if float(price * vol) < MIN_ORDER_KRW:
                 if kind == "mid":
                     r.update(half_done=True, msg="절반이 최소 주문 금액보다 작아 중간자동매도는 건너뜀")
                     return
-                raise UpbitError(f"매도 금액 {float(price * vol):,.0f}원 < 최소 {MIN_ORDER_KRW:,}원")
+                # 5,000원 미만 자투리: 업비트가 매도 주문을 받지 않음 → 오류로 멈추지 않고 알리기만 함
+                r["msg"] = (f"가진 양이 {float(price * vol):,.0f}원어치라 업비트 최소 주문 금액 "
+                            f"{MIN_ORDER_KRW:,}원보다 작아서 팔 수 없어요")
+                if not r.get("dust"):
+                    r["dust"] = True
+                    self._log(r, "5,000원 미만이라 매도 불가", float(price), float(vol))
+                return
             what = "중간자동매도(절반)" if kind == "mid" else "자동매도(전체)"
             if mock:
                 self._log(r, what + " 체결(모의)", float(price), float(vol))
                 self._sold(r, kind, float(vol), f"{what} {fmt_dec(price)}원(모의)")
             else:
                 o = self.client.limit_order(m, "ask", vol, price)
-                r.update(state=SELLING, order=o["uuid"], kind=kind, msg=f"{what} 주문 {fmt_dec(price)}원")
-                self._log(r, what + " 주문", float(price), float(vol))
+                r.update(state=SELLING, order=o["uuid"], kind=kind, held=float(vol) if kind == "up" else r.get("held"),
+                         msg=f"{what} 주문 {fmt_dec(price)}원 (FOK)")
+                if not r.get("miss"):
+                    self._log(r, what + " 주문", float(price), float(vol), "매수1호가-2호가 · 전량 체결 아니면 취소(FOK)")
             return
 
         if s == SELLING:
@@ -579,14 +642,16 @@ class Engine:
             o = self.client.get_order(r["order"])
             ex = float(o.get("executed_volume") or 0)
             what = "중간자동매도(절반)" if r.get("kind") == "mid" else "자동매도(전체)"
-            if o["state"] == "done":
-                self._log(r, what + " 체결", _f(o.get("price")), ex)
+            if o["state"] in ("done", "cancel") and ex > 0:
+                r["miss"] = False
+                self._log(r, what + " 체결", _avg_price(o), ex)
                 self._sold(r, r.get("kind"), ex, f"{what} 체결 {ex:g}개")
-            elif o["state"] == "cancel":
-                left = max((r.get("held") or 0) - ex, 0.0)
-                r.update(state=HOLD if left > 0 else self._after_all(r), held=left, order=None, kind=None,
-                         msg="매도 주문이 취소됨")
-                self._log(r, "매도 주문 취소됨", None, ex)
+            elif o["state"] in ("done", "cancel"):           # FOK: 물량이 모자라 하나도 안 팔고 취소됨 → 다음 차례에 다시
+                r.update(state=HOLD, order=None, kind=None,
+                         msg="호가 물량이 모자라 체결 안 됨(FOK 취소) — 3초 뒤 다시 시도")
+                if not r.get("miss"):
+                    r["miss"] = True
+                    self._log(r, what + " 체결 안 됨(FOK 취소)", _f(o.get("price")), 0, "다시 시도합니다")
             else:
                 r["msg"] = f"{what} 체결 기다리는 중 ({ex:g}개 체결)"
             return
