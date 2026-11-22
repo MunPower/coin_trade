@@ -397,27 +397,34 @@ def _ip_hint(msg: str) -> str:
 
 
 LIST2_CSS = """<style>
-.st-key-coinlist{gap:0 !important;border:1px solid #c9ced6;overflow-x:auto}
-.st-key-coinlist [data-testid="stElementContainer"]{margin:0}
-.cl-row{display:grid;grid-template-columns:40px minmax(120px,1.35fr) minmax(76px,1fr) minmax(90px,1fr) minmax(80px,1fr)
- minmax(70px,.9fr) minmax(70px,.9fr) minmax(120px,1.35fr) minmax(120px,1.35fr) minmax(120px,1.35fr);
- font-size:13px;background:#fff;font-variant-numeric:tabular-nums;min-width:0}
-.cl-row>span{padding:8px 6px;border-right:1px solid #e3e6ea;border-top:1px solid #e3e6ea;text-align:right;white-space:nowrap;
- overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;justify-content:flex-end}
+/* 리스트 테두리. 세로 스크롤바가 생기지 않게 세로는 숨기고, 창이 아주 좁을 때만 가로로 밀어서 보기 */
+.st-key-coinlist{gap:0 !important;border:1px solid #c9ced6;overflow-x:auto;overflow-y:hidden}
+.st-key-coinlist [data-testid="stElementContainer"]{margin:0 !important}
+/* Streamlit 글 칸은 아래 여백이 -1rem 이라 다음 줄이 위로 겹쳐 글씨를 가림 → 0으로 */
+.st-key-coinlist [data-testid="stMarkdownContainer"]{margin-bottom:0 !important}
+.st-key-coinlist [data-testid="stMarkdownContainer"]>div{margin:0}
+/* 가격 칸은 가장 긴 숫자도 다 들어가는 폭보다 좁아지지 않음 → 잘리지 않음 (모든 줄이 같은 폭이라 세로줄도 맞음) */
+.cl-row{display:grid;grid-template-columns:42px minmax(110px,1.1fr) minmax(80px,.8fr) minmax(112px,1fr) minmax(100px,.9fr)
+ minmax(80px,.8fr) minmax(80px,.8fr) minmax(152px,1.3fr) minmax(152px,1.3fr) minmax(152px,1.3fr);
+ font-size:13px;line-height:1.35;background:#fff;font-variant-numeric:tabular-nums;min-width:1060px}
+.cl-row>span{padding:7px 8px;border-right:1px solid #e3e6ea;border-top:1px solid #e3e6ea;text-align:right;white-space:nowrap;
+ display:flex;align-items:center;justify-content:flex-end;min-height:44px;box-sizing:border-box}
 .cl-row>span:last-child{border-right:0}
-.cl-row.hd>span{background:#e9edf3;color:#333;font-weight:600;justify-content:center;border-top:0;border-right-color:#d3d8df}
+.cl-row.hd>span{background:#e9edf3;color:#333;font-weight:600;justify-content:center;border-top:0;border-right-color:#d3d8df;min-height:36px}
 .cl-row.ev>span{background:#fafbfc}
 .cl-row.open>span{background:#eef4ff}
 .cl-row .rk{justify-content:center;color:#888}
-.cl-row .nm{flex-direction:column;align-items:flex-start;justify-content:center;font-weight:700;color:#111;text-align:left}
+.cl-row .nm{flex-direction:column;align-items:flex-start;justify-content:center;font-weight:700;color:#111;text-align:left;overflow:hidden}
+.cl-row .nm>span:first-child{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .cl-row .nm .sub{display:block;font-size:11px;font-weight:400;color:#999}
 .cl-row .nm .on{display:inline-block;margin-left:4px;padding:0 4px;border-radius:3px;background:#1f4fa8;color:#fff;font-size:10px;font-weight:600;vertical-align:1px}
 .cl-row .sg{justify-content:center;font-weight:800}.cl-row .sg.buy{color:#e5484d}.cl-row .sg.sell{color:#1a56db}
 .cl-row .tv{color:#333}
-.cl-row .hm{font-size:11px;color:#999;font-weight:400;margin-left:3px}
+.cl-row .hm{font-size:11px;color:#999;font-weight:400;margin-left:4px}
 .cl-row .up{color:#e5484d}.cl-row .dn{color:#1a56db}.cl-row .eq{color:#333}
 @media (max-width:600px){
- .cl-row{grid-template-columns:34px minmax(0,1.3fr) 70px minmax(0,1fr) 62px}
+ .cl-row{grid-template-columns:32px minmax(0,1fr) 64px 100px 68px;min-width:0;font-size:12.5px}
+ .cl-row>span{padding:7px 5px}
  .cl-row .pc{display:none !important}
 }
 [class*="st-key-lrow_"]{position:relative;gap:0 !important}
