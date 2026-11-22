@@ -443,8 +443,10 @@ LIST2_CSS = """<style>
 .cl-row .rk{justify-content:center;color:#888}
 .cl-row .nm{flex-direction:column;align-items:flex-start;justify-content:center;font-weight:700;color:#111;text-align:left;overflow:hidden}
 .cl-row .nm>span:first-child{max-width:100%;overflow:hidden;text-overflow:ellipsis}
-.cl-row .nm .sub{display:block;font-size:11px;font-weight:400;color:#999}
-.cl-row .nm .on{display:inline-block;margin-left:4px;padding:0 4px;border-radius:3px;background:#1f4fa8;color:#fff;font-size:10px;font-weight:600;vertical-align:1px}
+.cl-row .nm .sub{display:flex;flex-wrap:wrap;align-items:center;gap:2px 3px;font-size:11px;font-weight:400;color:#999;white-space:normal}
+/* 켜진 버튼 표시: 코인 영문 옆(둘째 줄)에 붙이고, 칸이 좁으면 다음 줄로 넘어감 → 잘리지 않음 */
+.cl-row .nm .on{display:inline-block;padding:0 4px;border-radius:3px;color:#fff;font-size:10px;font-weight:600;line-height:15px}
+.cl-row .nm .on.up{background:#1a56db}.cl-row .nm .on.mid{background:#444}.cl-row .nm .on.low{background:#e5484d}
 .cl-row .sg{justify-content:center;font-weight:800}.cl-row .sg.buy{color:#e5484d}.cl-row .sg.sell{color:#1a56db}
 .cl-row .tv{color:#333}
 .cl-row .hm{font-size:11px;color:#999;font-weight:400;margin-left:4px}
@@ -624,13 +626,13 @@ def trade_list(rows, sig, hm=None):
             k = "eq" if pct is None else ("up" if pct > 0 else ("dn" if pct < 0 else "eq"))
             arrow = "" if not pct else ("▲ " if pct > 0 else "▼ ")
             pct_t = "-" if pct is None else f"{pct:+.2f}%" if pct else "0.00%"
-            ons = "".join(f'<span class="on">{BTN_TAG[b_]}</span>'
+            ons = "".join(f'<span class="on {b_}">{BTN_TAG[b_]}</span>'
                           for b_ in ("up", "mid", "low") if rule.get(b_))          # 켜져 있는 버튼 표시
             cls = "cl-row" + (" open" if opened == m else (" ev" if i % 2 == 0 else ""))
             with st.container(key=f"lrow_{m}"):
                 st.markdown(
                     f'<div class="{cls}"><span class="rk">{i if i <= len(rows) else "-"}</span>'
-                    f'<span class="nm"><span>{html.escape(kr)}{ons}</span><span class="sub">{html.escape(sym)}</span></span>{sg}'
+                    f'<span class="nm"><span>{html.escape(kr)}</span><span class="sub"><span>{html.escape(sym)}</span>{ons}</span></span>{sg}'
                     f'<span class="{k}">{px(close, d)}</span>'
                     f'<span class="pc {k}">{arrow}{px(None if chg is None else abs(chg), d)}</span>'
                     f'<span class="{k}">{pct_t}</span>'
