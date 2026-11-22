@@ -714,7 +714,7 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
                            disabled=not on_all,
                            help=(off_tip if not on_all else "이 코인의 자동매도 · 중간자동매도 · 자동매수를 한 번에 모두 끕니다"
                                  if any_on else "켜져 있는 버튼이 없어요"))
-            cols[1].button("모두 클릭", key=f"btn_allon_{m}", width="stretch", on_click=_on_click_all, args=(m, kr),
+            cols[1].button("모두 실행", key=f"btn_allon_{m}", width="stretch", on_click=_on_click_all, args=(m, kr),
                            disabled=not on_all,
                            help=off_tip if not on_all else "이 코인의 자동매도 · 중간자동매도 · 자동매수를 한 번에 모두 켭니다")
             for col, k in zip(cols[2:], ("up", "mid", "low")):
