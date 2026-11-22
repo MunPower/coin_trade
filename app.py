@@ -465,9 +465,19 @@ LIST2_CSS = """<style>
 [class*="st-key-lamt_"] [data-testid="stHorizontalBlock"],[class*="st-key-tbtn_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:6px !important;align-items:center}
 [class*="st-key-lamt_"] [data-testid="stColumn"],[class*="st-key-tbtn_"] [data-testid="stColumn"]{min-width:0 !important;width:auto !important}
 [class*="st-key-tbtn_"] [data-testid="stColumn"]{flex:1 1 0 !important}
-[class*="st-key-tbtn_"] button{padding:6px 2px !important;min-height:40px}
-[class*="st-key-tbtn_"] button p{font-size:14px !important;white-space:nowrap !important}
-@media (max-width:600px){[class*="st-key-tbtn_"] button p{font-size:12.5px !important}}
+[class*="st-key-tbtn_"] button{padding:6px 4px !important;min-height:42px;background:#fff !important}
+[class*="st-key-tbtn_"] button p{font-size:14px !important;font-weight:600;line-height:1.3;white-space:normal !important;word-break:keep-all}
+/* 버튼 글씨 색: 자동매도 파랑 · 중간자동매도 검정 · 자동매수 빨강 */
+[class*="st-key-btn_up_"] button p{color:#1a56db !important}
+[class*="st-key-btn_mid_"] button p{color:#111 !important}
+[class*="st-key-btn_low_"] button p{color:#e5484d !important}
+[class*="st-key-btn_up_"] button{border-color:#9db4e0 !important}
+[class*="st-key-btn_low_"] button{border-color:#f0b4b6 !important}
+/* 켜진 버튼(취소로 바뀐 것): 글씨 색은 그대로 두고 바탕을 옅게 칠하고 테두리를 굵게 */
+[class*="st-key-btn_up_"] button[kind="primary"],[class*="st-key-btn_up_"] [data-testid="stBaseButton-primary"]{background:#e8f0fe !important;border:2px solid #1a56db !important}
+[class*="st-key-btn_mid_"] button[kind="primary"],[class*="st-key-btn_mid_"] [data-testid="stBaseButton-primary"]{background:#eceef1 !important;border:2px solid #111 !important}
+[class*="st-key-btn_low_"] button[kind="primary"],[class*="st-key-btn_low_"] [data-testid="stBaseButton-primary"]{background:#fdecec !important;border:2px solid #e5484d !important}
+@media (max-width:600px){[class*="st-key-tbtn_"] button p{font-size:12.5px !important}[class*="st-key-tbtn_"] button{min-height:52px}}
 </style>"""
 
 BTN_HELP = {"up": "현재가가 매도가능(곡선상한)에 닿으면 남은 것 전부 매도",
@@ -553,7 +563,9 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
         with st.container(key=f"tbtn_{m}"):
             for col, k in zip(st.columns(3), ("up", "mid", "low")):
                 is_on = bool(rule.get(k))
-                col.button(f"{BTN_LABEL[k]} 취소" if is_on else BTN_LABEL[k], key=f"btn_{k}_{m}",
+                val = f"({px(b[k])})" if b else ""                 # 자동매도(매도가능 값) · 중간자동매도(중간값) · 자동매수(매수가능 값)
+                label = f"{BTN_LABEL[k]}{val}" + (" 취소" if is_on else "")
+                col.button(label, key=f"btn_{k}_{m}",
                            type="primary" if is_on else "secondary", width="stretch",
                            on_click=_on_toggle, args=(m, k, kr), help=BTN_HELP[k])
 
