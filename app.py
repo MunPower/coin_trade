@@ -424,13 +424,24 @@ def _ip_hint(msg: str) -> str:
 
 
 LIST2_CSS = """<style>
-/* 맨 위 줄: 모드 선택과 켜기 스위치 */
+/* 맨 위 줄: [모의][실전] + [자동매매 켜짐/꺼짐] */
 .st-key-topbar [data-testid="stHorizontalBlock"]{gap:10px !important}
-.st-key-topctl{border:1px solid #c9ced6;border-radius:10px;padding:4px 12px;background:#fff}
-.st-key-topctl [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:12px !important}
+.sl-top a.tab{white-space:nowrap}
+.st-key-topctl{border:1px solid #c9ced6;border-radius:10px;padding:6px 10px;background:#fff}
+.st-key-topctl [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:6px !important}
 .st-key-topctl [data-testid="stColumn"]{min-width:0 !important;width:auto !important}
-.st-key-topctl [data-testid="stWidgetLabel"] p{font-size:15px !important;font-weight:700;white-space:nowrap}
-.st-key-topctl button p{font-size:15px !important;font-weight:600}
+.st-key-topctl button{min-height:38px;padding:4px 8px !important}
+.st-key-topctl button p{font-size:15px !important;font-weight:700;white-space:nowrap}
+.st-key-mode_mock button,.st-key-mode_real button{background:#fff !important;border-color:#c9ced6 !important}
+.st-key-mode_mock button p,.st-key-mode_real button p{color:#888 !important}
+.st-key-mode_mock button[kind="primary"],.st-key-mode_mock [data-testid="stBaseButton-primary"]{background:#eef1f5 !important;border:2px solid #555 !important}
+.st-key-mode_mock button[kind="primary"] p,.st-key-mode_mock [data-testid="stBaseButton-primary"] p{color:#333 !important}
+.st-key-mode_real button[kind="primary"],.st-key-mode_real [data-testid="stBaseButton-primary"]{background:#fdecec !important;border:2px solid #e5484d !important}
+.st-key-mode_real button[kind="primary"] p,.st-key-mode_real [data-testid="stBaseButton-primary"] p{color:#e5484d !important}
+.st-key-trade_onoff button{background:#f4f5f7 !important;border-color:#c9ced6 !important}
+.st-key-trade_onoff button p{color:#666 !important}
+.st-key-trade_onoff button[kind="primary"],.st-key-trade_onoff [data-testid="stBaseButton-primary"]{background:#e6f6ec !important;border:2px solid #0aa05a !important}
+.st-key-trade_onoff button[kind="primary"] p,.st-key-trade_onoff [data-testid="stBaseButton-primary"] p{color:#0a8a4c !important}
 @media (max-width:600px){.st-key-topbar [data-testid="stColumn"]{min-width:100% !important}}
 /* 리스트 테두리. 세로 스크롤바가 생기지 않게 세로는 숨기고, 창이 아주 좁을 때만 가로로 밀어서 보기 */
 .st-key-coinlist{gap:0 !important;border:1px solid #c9ced6;overflow-x:auto;overflow-y:hidden}
@@ -786,8 +797,27 @@ def _real_dialog():
         st.rerun()
 
 
+def _on_mode(want_mock: bool):
+    """[모의] / [실전] 버튼"""
+    eng = get_engine()
+    if want_mock == eng.snapshot()["mock"]:
+        return
+    if want_mock:
+        err = eng.set_mock(True)
+        if err:
+            st.session_state.setdefault("trade_msgs", []).append(err)
+    else:
+        st.session_state["_ask_real"] = True                # 다음 화면에서 확인 창을 띄움
+
+
+def _on_onoff():
+    """[자동매매 켜기/끄기] 버튼: 누를 때마다 켜짐 ↔ 꺼짐"""
+    eng = get_engine()
+    eng.set_enabled(not eng.snapshot()["enabled"])
+
+
 def top_controls():
-    """화면 맨 위 줄: [모의 | 실전] 모드 선택 + 자동매매 켜기 스위치"""
+    """화면 맨 위 줄: [모의][실전] + [자동매매 켜짐/꺼짐] — 모두 버튼이라 화면에 겹쳐 남지 않음"""
     eng = get_engine()
     if _locked():
         st.markdown('<div style="font-size:13px;color:#888;text-align:center">🔒 자동매매는 아래에서 비밀번호를 넣어 주세요</div>',
@@ -795,30 +825,19 @@ def top_controls():
         return
     snap = eng.snapshot()
     mock, on = snap["mock"], snap["enabled"]
-    nonce = st.session_state.get("_mode_nonce", 0)
     with st.container(key="topctl"):
-        c1, c2 = st.columns([1.15, 1], vertical_alignment="center")
-        pick = getattr(c1, "segmented_control", None)   # 예전 Streamlit이면 동그라미 선택(radio)으로
-        sel = (pick("모드", ["모의", "실전"], default="모의" if mock else "실전",
-                    key=f"mode_{mock}_{nonce}", label_visibility="collapsed",
-                    disabled=eng.client is None,
-                    help="모의 = 기록만 남김 · 실전 = 업비트에 실제 주문" +
-                         ("" if eng.client else " (실전은 업비트 API 키가 있어야 해요)"))
-               if pick else
-               c1.radio("모드", ["모의", "실전"], index=0 if mock else 1, horizontal=True, key=f"mode_{mock}_{nonce}",
-                        label_visibility="collapsed", disabled=eng.client is None))
-        if sel == "모의" and not mock:
-            err = eng.set_mock(True)
-            st.error(err) if err else st.rerun()
-        elif sel == "실전" and mock:
-            st.session_state["_mode_nonce"] = nonce + 1     # 창을 닫으면 다음에는 다시 '모의'로 보이게
-            _real_dialog()
-        new = c2.toggle(f"자동매매 {'켜짐' if on else '꺼짐'}", value=on, key=f"trade_on_{on}",
-                        help="켜 두면 3초마다 현재가를 확인해서, 버튼이 켜진 코인만 조건이 맞을 때 주문합니다. "
-                             "프로그램을 다시 켜면 안전을 위해 꺼진 상태로 시작해요.")
-        if new != on:
-            eng.set_enabled(new)
-            st.rerun()
+        c1, c2, c3 = st.columns([1, 1, 2.3], vertical_alignment="center")
+        c1.button("모의", key="mode_mock", type="primary" if mock else "secondary", width="stretch",
+                  on_click=_on_mode, args=(True,), help="모의 = 실제 주문 없이 기록만 남김")
+        c2.button("실전", key="mode_real", type="secondary" if mock else "primary", width="stretch",
+                  on_click=_on_mode, args=(False,), disabled=eng.client is None,
+                  help="실전 = 업비트에 실제 주문" + ("" if eng.client else " (업비트 API 키가 있어야 해요)"))
+        c3.button("● 자동매매 켜짐" if on else "○ 자동매매 꺼짐", key="trade_onoff",
+                  type="primary" if on else "secondary", width="stretch", on_click=_on_onoff,
+                  help=("지금 켜져 있어요. 누르면 멈춥니다." if on else "지금 꺼져 있어요. 누르면 시작합니다.") +
+                       " 켜져 있으면 3초마다 현재가를 확인해서, 버튼이 켜진 코인만 조건이 맞을 때 주문합니다.")
+    if st.session_state.pop("_ask_real", False) and snap["mock"]:
+        _real_dialog()
 
 
 def trade_panel():
@@ -1064,7 +1083,7 @@ if not qp.get("code"):
     if UP:
         with ph.container():                                  # ② 버튼 줄 + 누르면 펼쳐지는 리스트
             with st.container(key="topbar"):
-                t1, t2, t3 = st.columns([4.6, 3.6, 2.8], vertical_alignment="center")
+                t1, t2, t3 = st.columns([5.2, 3.6, 2.5], vertical_alignment="center")
                 t1.markdown(build(sig, _tm, table=False, part="left"), unsafe_allow_html=True)
                 with t2:
                     top_controls()                          # 모드(모의/실전) · 자동매매 켜기
