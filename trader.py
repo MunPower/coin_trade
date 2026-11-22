@@ -592,8 +592,20 @@ class Engine:
         if s == HOLD:
             held = r.get("held") or 0.0
             if not mock:
-                bal = (acc or {}).get(m[4:], {}).get("balance", 0.0)
-                held = min(held, bal)
+                a_ = (acc or {}).get(m[4:], {})
+                bal = a_.get("balance", 0.0)
+                if (bal + a_.get("locked", 0.0)) * p < MIN_ORDER_KRW:
+                    # 업비트 앱에서 직접 팔았거나(전부/대부분) 남은 게 5,000원 미만 → 더 팔 수 없으니 이 코인 매매를 정리
+                    nxt = self._after_all(r)
+                    r.update(state=nxt, held=0.0, half_done=False, order=None, kind=None, miss=False, dust=False,
+                             msg="업비트에서 직접 판 것으로 보여 정리했어요" +
+                                 (" → 다시 자동매수 대기" if nxt == WAIT else ""))
+                    self._log(r, "보유 없음 — 직접 매도로 보고 정리", p, bal,
+                              "업비트 계좌에 이 코인이 (5,000원어치 이상) 남아 있지 않음")
+                    return
+                if bal < held:                                 # 일부만 직접 팔았으면 남은 만큼만 계속 관리
+                    held = bal
+                    r["held"] = bal
             kind = None
             if r.get("up") and p >= b["up"]:
                 kind, target, vol = "up", b["up"], held                       # 전체 매도
