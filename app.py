@@ -424,6 +424,14 @@ def _ip_hint(msg: str) -> str:
 
 
 LIST2_CSS = """<style>
+/* 맨 위 줄: 모드 선택과 켜기 스위치 */
+.st-key-topbar [data-testid="stHorizontalBlock"]{gap:10px !important}
+.st-key-topctl{border:1px solid #c9ced6;border-radius:10px;padding:4px 12px;background:#fff}
+.st-key-topctl [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:12px !important}
+.st-key-topctl [data-testid="stColumn"]{min-width:0 !important;width:auto !important}
+.st-key-topctl [data-testid="stWidgetLabel"] p{font-size:15px !important;font-weight:700;white-space:nowrap}
+.st-key-topctl button p{font-size:15px !important;font-weight:600}
+@media (max-width:600px){.st-key-topbar [data-testid="stColumn"]{min-width:100% !important}}
 /* 리스트 테두리. 세로 스크롤바가 생기지 않게 세로는 숨기고, 창이 아주 좁을 때만 가로로 밀어서 보기 */
 .st-key-coinlist{gap:0 !important;border:1px solid #c9ced6;overflow-x:auto;overflow-y:hidden}
 .st-key-coinlist [data-testid="stElementContainer"]{margin:0 !important}
@@ -763,6 +771,56 @@ def trade_list(rows, sig, hm=None):
 trade_list_part = st.fragment(trade_list) if hasattr(st, "fragment") else trade_list
 
 
+@st.dialog("실전 모드로 바꿀까요?")
+def _real_dialog():
+    st.markdown("실전 모드에서는 **업비트에 실제 돈으로 주문**이 나갑니다.  \n"
+                "모의 모드에서 원하는 대로 사고파는지 충분히 확인하셨나요?")
+    c1, c2 = st.columns(2)
+    if c1.button("실전으로 바꾸기", type="primary", width="stretch"):
+        err = get_engine().set_mock(False)
+        if err:
+            st.error(err)
+        else:
+            st.rerun()
+    if c2.button("취소", width="stretch"):
+        st.rerun()
+
+
+def top_controls():
+    """화면 맨 위 줄: [모의 | 실전] 모드 선택 + 자동매매 켜기 스위치"""
+    eng = get_engine()
+    if _locked():
+        st.markdown('<div style="font-size:13px;color:#888;text-align:center">🔒 자동매매는 아래에서 비밀번호를 넣어 주세요</div>',
+                    unsafe_allow_html=True)
+        return
+    snap = eng.snapshot()
+    mock, on = snap["mock"], snap["enabled"]
+    nonce = st.session_state.get("_mode_nonce", 0)
+    with st.container(key="topctl"):
+        c1, c2 = st.columns([1.15, 1], vertical_alignment="center")
+        pick = getattr(c1, "segmented_control", None)   # 예전 Streamlit이면 동그라미 선택(radio)으로
+        sel = (pick("모드", ["모의", "실전"], default="모의" if mock else "실전",
+                    key=f"mode_{mock}_{nonce}", label_visibility="collapsed",
+                    disabled=eng.client is None,
+                    help="모의 = 기록만 남김 · 실전 = 업비트에 실제 주문" +
+                         ("" if eng.client else " (실전은 업비트 API 키가 있어야 해요)"))
+               if pick else
+               c1.radio("모드", ["모의", "실전"], index=0 if mock else 1, horizontal=True, key=f"mode_{mock}_{nonce}",
+                        label_visibility="collapsed", disabled=eng.client is None))
+        if sel == "모의" and not mock:
+            err = eng.set_mock(True)
+            st.error(err) if err else st.rerun()
+        elif sel == "실전" and mock:
+            st.session_state["_mode_nonce"] = nonce + 1     # 창을 닫으면 다음에는 다시 '모의'로 보이게
+            _real_dialog()
+        new = c2.toggle(f"자동매매 {'켜짐' if on else '꺼짐'}", value=on, key=f"trade_on_{on}",
+                        help="켜 두면 3초마다 현재가를 확인해서, 버튼이 켜진 코인만 조건이 맞을 때 주문합니다. "
+                             "프로그램을 다시 켜면 안전을 위해 꺼진 상태로 시작해요.")
+        if new != on:
+            eng.set_enabled(new)
+            st.rerun()
+
+
 def trade_panel():
     """리스트 아래: 예수금 · 모드 · 자동매매 켜기 · 진행 현황"""
     eng, acc, acc_err = _trade_ctx()
@@ -783,21 +841,7 @@ def trade_panel():
     if acc_err:
         st.error(f"계좌 조회 실패: {acc_err}{_ip_hint(acc_err)}")
 
-    m1, m2 = st.columns(2)
-    mode = m1.radio("모드", ["모의", "실전"], index=0 if snap["mock"] else 1, horizontal=True,
-                    disabled=eng.client is None, key=f"trade_mode_{snap['mock']}")
-    if mode == "모의" and not snap["mock"]:
-        err = eng.set_mock(True)
-        st.error(err) if err else st.rerun()
-    elif mode == "실전" and snap["mock"]:
-        if m1.checkbox("⚠️ 실제 돈으로 주문이 나가는 것을 확인했습니다", key="real_ok"):
-            err = eng.set_mock(False)
-            st.error(err) if err else st.rerun()
-    on = m2.toggle("자동매매 켜기", value=snap["enabled"], key=f"trade_on_{snap['enabled']}",
-                   help="켜 두면 3초마다 현재가를 확인해서, 버튼이 켜진 코인만 조건이 맞을 때 주문합니다.")
-    if on != snap["enabled"]:
-        eng.set_enabled(on)
-        st.rerun()
+    st.caption("모드(모의/실전)와 자동매매 켜기는 화면 맨 위 [새로고침] 오른쪽에 있어요.")
     bk0 = int(snap.get("buy_krw") or 0)
     nv0 = st.number_input("자동매수 1회 금액(원) — 모든 코인 공통", min_value=0, step=5000, value=bk0,
                           key=f"buy_krw_{bk0}",
@@ -933,14 +977,19 @@ if not qp.get("code"):
         st.markdown(f'<a href="{link(x=other)}" target="_self">→ {EXCH[other][0]}로 보기</a>', unsafe_allow_html=True)
         st.stop()
 
-    def build(sig, tm="", hm=None, table=True, links=True):
+    def build(sig, tm="", hm=None, table=True, links=True, part=None):
         hm = hm or {}
-        h = [LIST_CSS, '<div class="sl-top">']
+        if part == "asof":                              # 업비트 윗줄 오른쪽: 기준 시각만
+            return (LIST_CSS + '<div class="sl-top" style="justify-content:flex-end;margin:0"><span class="asof">'
+                    f'<span class="pc">24시간 거래대금 TOP{TOP_N} · </span>기준 {asof}<span class="pc"> (한국시간)</span></span></div>')
+        h = [LIST_CSS, '<div class="sl-top"' + (' style="margin:0"' if part == "left" else "") + '>']
         for k_, (label, _) in EXCH.items():
             h.append(f'<a class="tab{" on" if k_ == XCH else ""}" href="{link(x=k_)}" target="_self">{label}</a>')
         h.append(f'<a class="tab rf" href="{link(x=XCH, refresh=1)}" target="_self" title="시세 다시 받기">↻ 새로고침</a><span class="brk"></span>')
         h.append(tm or '<span class="tm">⏱ 측정 중…</span>')
-        h.append(f'<span class="asof"><span class="pc">24시간 거래대금 TOP{TOP_N} · </span>기준 {asof}<span class="pc"> (한국시간)</span></span></div>')
+        if part != "left":
+            h.append(f'<span class="asof"><span class="pc">24시간 거래대금 TOP{TOP_N} · </span>기준 {asof}<span class="pc"> (한국시간)</span></span>')
+        h.append('</div>')
         if not table:                                   # 업비트: 위 버튼 줄만 (리스트는 누르면 펼쳐지는 칸으로 따로 그림)
             return "".join(h)
         h.append('<div class="sl-wrap"><table><thead><tr><th class="rk">순위</th>'
@@ -1014,7 +1063,12 @@ if not qp.get("code"):
     _tm = timing_html([("리스트", t_list), ("시세", t_fetch), ("계산", t_calc), ("전체", time.time() - _t0)])
     if UP:
         with ph.container():                                  # ② 버튼 줄 + 누르면 펼쳐지는 리스트
-            st.markdown(build(sig, _tm, table=False), unsafe_allow_html=True)
+            with st.container(key="topbar"):
+                t1, t2, t3 = st.columns([4.6, 3.6, 2.8], vertical_alignment="center")
+                t1.markdown(build(sig, _tm, table=False, part="left"), unsafe_allow_html=True)
+                with t2:
+                    top_controls()                          # 모드(모의/실전) · 자동매매 켜기
+                t3.markdown(build(sig, part="asof"), unsafe_allow_html=True)
             trade_list_part(rows, sig, hm)
         st.session_state["_list_drawn"] = True
         st.caption("※ 코인을 누르면 그 아래에 자동매매 버튼이 펼쳐집니다. 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. "
