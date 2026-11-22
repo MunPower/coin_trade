@@ -397,20 +397,29 @@ def _ip_hint(msg: str) -> str:
 
 
 LIST2_CSS = """<style>
-.st-key-coinlist{gap:0 !important;border:1px solid #d3d8df;border-radius:6px;overflow:hidden}
+.st-key-coinlist{gap:0 !important;border:1px solid #c9ced6;overflow-x:auto}
 .st-key-coinlist [data-testid="stElementContainer"]{margin:0}
-.cl-row{display:grid;grid-template-columns:40px minmax(0,1fr) 84px 120px 76px 80px;align-items:center;
- padding:9px 8px;border-top:1px solid #e3e6ea;font-size:14px;background:#fff;font-variant-numeric:tabular-nums}
-.cl-row.hd{background:#f1f3f6;color:#555;font-size:13px;border-top:0;padding:7px 8px}
-.cl-row.open{background:#eef4ff}
-.cl-row .rk{text-align:center;color:#666}
-.cl-row .nm{font-weight:600;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cl-row .nm .sub{font-weight:400;color:#999;font-size:12px;margin-left:4px}
-.cl-row .sg{text-align:center;font-weight:700;font-size:13px}.cl-row .sg.buy{color:#e5484d}.cl-row .sg.sell{color:#1a56db}
-.cl-row .r{text-align:right;white-space:nowrap}
-.cl-row .on{display:inline-block;margin-left:5px;padding:0 5px;border-radius:4px;background:#1f4fa8;color:#fff;font-size:11px;font-weight:600;vertical-align:1px}
+.cl-row{display:grid;grid-template-columns:40px minmax(120px,1.35fr) minmax(76px,1fr) minmax(90px,1fr) minmax(80px,1fr)
+ minmax(70px,.9fr) minmax(70px,.9fr) minmax(120px,1.35fr) minmax(120px,1.35fr) minmax(120px,1.35fr);
+ font-size:13px;background:#fff;font-variant-numeric:tabular-nums;min-width:0}
+.cl-row>span{padding:8px 6px;border-right:1px solid #e3e6ea;border-top:1px solid #e3e6ea;text-align:right;white-space:nowrap;
+ overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;justify-content:flex-end}
+.cl-row>span:last-child{border-right:0}
+.cl-row.hd>span{background:#e9edf3;color:#333;font-weight:600;justify-content:center;border-top:0;border-right-color:#d3d8df}
+.cl-row.ev>span{background:#fafbfc}
+.cl-row.open>span{background:#eef4ff}
+.cl-row .rk{justify-content:center;color:#888}
+.cl-row .nm{flex-direction:column;align-items:flex-start;justify-content:center;font-weight:700;color:#111;text-align:left}
+.cl-row .nm .sub{display:block;font-size:11px;font-weight:400;color:#999}
+.cl-row .nm .on{display:inline-block;margin-left:4px;padding:0 4px;border-radius:3px;background:#1f4fa8;color:#fff;font-size:10px;font-weight:600;vertical-align:1px}
+.cl-row .sg{justify-content:center;font-weight:800}.cl-row .sg.buy{color:#e5484d}.cl-row .sg.sell{color:#1a56db}
+.cl-row .tv{color:#333}
+.cl-row .hm{font-size:11px;color:#999;font-weight:400;margin-left:3px}
 .cl-row .up{color:#e5484d}.cl-row .dn{color:#1a56db}.cl-row .eq{color:#333}
-@media (max-width:600px){.cl-row{grid-template-columns:34px minmax(0,1fr) 72px 104px}.cl-row .pc{display:none}}
+@media (max-width:600px){
+ .cl-row{grid-template-columns:34px minmax(0,1.3fr) 70px minmax(0,1fr) 62px}
+ .cl-row .pc{display:none !important}
+}
 [class*="st-key-lrow_"]{position:relative;gap:0 !important}
 [class*="st-key-lbtn_"]{position:absolute !important;inset:0;z-index:3}
 [class*="st-key-lbtn_"] div,[class*="st-key-lbtn_"] button{width:100% !important;height:100% !important}
@@ -524,11 +533,12 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
                            on_click=_on_toggle, args=(m, k, kr), help=BTN_HELP[k])
 
 
-def trade_list(rows, sig):
-    """업비트 리스트: 줄을 누르면 바로 아래에 자동매매 칸이 펼쳐짐 (한 번에 하나)"""
+def trade_list(rows, sig, hm=None):
+    """업비트 리스트 (코인001 표와 같은 모양): 줄을 누르면 바로 아래에 자동매매 칸이 펼쳐짐 (한 번에 하나)"""
+    hm = hm or {}
     eng, acc, _ = _trade_ctx()
     rules = eng.snapshot()["rules"]
-    items = [(r[0], r[1], r[2], r[3], r[5], r[9]) for r in rows]      # 마켓, 이름, 심볼, 현재가, 등락률, 거래대금
+    items = list(rows)                       # [마켓, 이름, 심볼, 현재가, 대비, 등락률, 시가, 고가, 저가, 거래대금, 전일종가]
     extra = [m for m, r in rules.items() if m not in {it[0] for it in items}
              and (any(r.get(k) for k in trader.BTN) or r.get("state") not in (trader.WAIT, trader.DONE))]
     if extra:                                                # 순위에서 빠졌어도 실행 중인 코인은 맨 아래에 표시
@@ -536,31 +546,45 @@ def trade_list(rows, sig):
             pe = trader.prices(extra)
         except Exception:
             pe = {}
-        items += [(m, rules[m].get("name") or m[4:], m[4:], pe.get(m), None, None) for m in extra]
+        items += [[m, rules[m].get("name") or m[4:], m[4:], pe.get(m)] + [None] * 7 for m in extra]
     for msg in st.session_state.pop("trade_msgs", []):
         st.warning(msg)
     st.markdown(LIST2_CSS, unsafe_allow_html=True)
     opened = st.session_state.get("open_coin")
+
+    def when(t):                                             # 가격 옆 작은 회색 (시:분)
+        return f'<span class="hm">({t})</span>' if t else ""
+
     with st.container(key="coinlist"):
-        st.markdown('<div class="cl-row hd"><span class="rk">순위</span><span>코인</span>'
-                    '<span style="text-align:center">신호</span><span class="r">현재가</span>'
-                    '<span class="r pc">등락률</span><span class="r pc">거래대금</span></div>', unsafe_allow_html=True)
-        for i, (m, kr, sym, close, pct, tv) in enumerate(items, 1):
+        st.markdown('<div class="cl-row hd"><span class="rk">순위</span><span>코인</span><span>신호</span>'
+                    '<span>현재가(원)</span><span class="pc">대비</span><span>등락률</span><span class="pc">거래대금</span>'
+                    '<span class="pc">시가(시간)</span><span class="pc">고가(시간)</span><span class="pc">저가(시간)</span></div>',
+                    unsafe_allow_html=True)
+        for i, (m, kr, sym, close, chg, pct, op, hi, lo, tv, prev) in enumerate(items, 1):
             rule = rules.get(m, {})
+            d = dec_of(close)
+            tt = hm.get(f"upbit:{m}", {})
             v = (sig or {}).get(f"upbit:{m}")
             sg = ('<span class="sg buy">매수 가능</span>' if v == "buy" else
                   '<span class="sg sell">매도 가능</span>' if v == "sell" else '<span class="sg"></span>')
-            k = "eq" if not pct else ("up" if pct > 0 else "dn")
+            k = "eq" if pct is None else ("up" if pct > 0 else ("dn" if pct < 0 else "eq"))
+            arrow = "" if not pct else ("▲ " if pct > 0 else "▼ ")
+            pct_t = "-" if pct is None else f"{pct:+.2f}%" if pct else "0.00%"
             ons = "".join(f'<span class="on">{"상" if b_ == "up" else "곡" if b_ == "mid" else "하"}</span>'
                           for b_ in ("up", "mid", "low") if rule.get(b_))          # 실행 중인 버튼 표시
+            cls = "cl-row" + (" open" if opened == m else (" ev" if i % 2 == 0 else ""))
             with st.container(key=f"lrow_{m}"):
                 st.markdown(
-                    f'<div class="cl-row{" open" if opened == m else ""}">'
-                    f'<span class="rk">{i if i <= len(rows) else "-"}</span>'
-                    f'<span class="nm">{html.escape(kr)}<span class="sub">{html.escape(sym)}</span>{ons}</span>{sg}'
-                    f'<span class="r {k}">{px(close)}</span>'
-                    f'<span class="r pc {k}">{"-" if pct is None else f"{pct:+.2f}%"}</span>'
-                    f'<span class="r pc">{money(tv)}</span></div>', unsafe_allow_html=True)
+                    f'<div class="{cls}"><span class="rk">{i if i <= len(rows) else "-"}</span>'
+                    f'<span class="nm"><span>{html.escape(kr)}{ons}</span><span class="sub">{html.escape(sym)}</span></span>{sg}'
+                    f'<span class="{k}">{px(close, d)}</span>'
+                    f'<span class="pc {k}">{arrow}{px(None if chg is None else abs(chg), d)}</span>'
+                    f'<span class="{k}">{pct_t}</span>'
+                    f'<span class="pc tv">{money(tv)}</span>'
+                    f'<span class="pc {ud(op, prev)}">{px(op, d)}{when(tt.get("o"))}</span>'
+                    f'<span class="pc {ud(hi, prev)}">{px(hi, d)}{when(tt.get("h"))}</span>'
+                    f'<span class="pc {ud(lo, prev)}">{px(lo, d)}{when(tt.get("l"))}</span></div>',
+                    unsafe_allow_html=True)
                 st.button(f"{kr} 펼치기", key=f"lbtn_{m}", on_click=_on_row, args=(m,))
             if opened == m:
                 _coin_panel(eng, acc, m, kr, sym, close, rule)
@@ -784,10 +808,8 @@ if not qp.get("code"):
     if len(known) < len(codes):
         note.caption("⏳ 매수·매도 신호를 계산하는 중입니다… (처음 한 번은 조금 걸려요)")
     _t0 = time.time()
-    _hx = _hf = None
-    if not UP:                                                # 시가·고가·저가 시각은 표에서만 사용
-        _hx = ThreadPoolExecutor(max_workers=1)
-        _hf = _hx.submit(all_hl_times, tuple((f"{XCH}:{r[0]}", r[7], r[8]) for r in rows))
+    _hx = ThreadPoolExecutor(max_workers=1)                  # 고가·저가 시각은 신호 계산과 동시에 구함
+    _hf = _hx.submit(all_hl_times, tuple((f"{XCH}:{r[0]}", r[7], r[8]) for r in rows))
     try:
         sig, _got, t_fetch, t_calc = list_signals(codes)
     except Exception as e:
@@ -807,8 +829,9 @@ if not qp.get("code"):
     if UP:
         with ph.container():                                  # ② 버튼 줄 + 누르면 펼쳐지는 리스트
             st.markdown(build(sig, _tm, table=False), unsafe_allow_html=True)
-            trade_list(rows, sig)
-        st.caption("※ 코인을 누르면 그 아래에 자동매매 칸이 펼쳐집니다. 스테이블코인(USDT·USDC 등)은 순위에서 뺐습니다.")
+            trade_list(rows, sig, hm)
+        st.caption("※ 코인을 누르면 그 아래에 자동매매 칸이 펼쳐집니다. 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. "
+                   "(시간)은 그 값이 나온 한국시간이며, 시가 시간은 거래소의 하루 시작 시각입니다.")
         trade_panel()
     else:
         ph.markdown(build(sig, _tm, hm), unsafe_allow_html=True)      # ② 신호 칸 + 걸린 시간 채워서 표시
