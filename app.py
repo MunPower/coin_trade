@@ -18,7 +18,15 @@ import streamlit.components.v1 as components
 from pathlib import Path
 from urllib.parse import urlencode
 import hmac
+import importlib
 import trader                                   # 자동매매 엔진 (같은 폴더의 trader.py)
+
+# GitHub에 trader.py를 새로 올려도 Streamlit이 예전 trader.py를 계속 쓰는 일이 있어서,
+# 파일이 바뀌었으면 여기서 다시 불러옴
+TRADER_VER = Path(trader.__file__).stat().st_mtime
+if getattr(trader, "_loaded_ver", None) != TRADER_VER:
+    trader = importlib.reload(trader)
+    trader._loaded_ver = TRADER_VER
 
 st.set_page_config(page_title="코인 거래대금 TOP10 · 자동매매", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
@@ -372,13 +380,32 @@ def _secret(k: str) -> str:
 
 
 @st.cache_resource(show_spinner=False)
-def get_engine():
-    """자동매매 엔진은 프로그램(서버)마다 하나만 만들어 계속 돌림 → 브라우저를 닫아도 계속 감시"""
+def _engines() -> list:
+    """지금까지 만든 엔진 목록 (trader.py가 바뀌면 새 엔진을 만들고 예전 것은 멈추기 위해)"""
+    return []
+
+
+@st.cache_resource(show_spinner=False)
+def _get_engine(ver: float):
+    import gc                                    # 예전 app.py가 만든 엔진까지 찾아서
+    olds = list(_engines()) + [o for o in gc.get_objects() if type(o).__name__ == "Engine" and hasattr(o, "data")]
+    for old in olds:                             # 예전 trader.py로 만든 엔진은 멈춤 (두 개가 같이 주문하지 않게)
+        try:
+            with old.lock:
+                old.data["enabled"] = False
+        except Exception:
+            pass
     ak, sk = _secret("UPBIT_ACCESS_KEY"), _secret("UPBIT_SECRET_KEY")
     client = trader.Upbit(ak, sk) if ak and sk else None
     eng = trader.Engine(Path(__file__).parent, client)
     eng.start()
+    _engines().append(eng)
     return eng
+
+
+def get_engine():
+    """자동매매 엔진은 프로그램(서버)마다 하나만 만들어 계속 돌림 → 브라우저를 닫아도 계속 감시"""
+    return _get_engine(TRADER_VER)
 
 
 @st.cache_data(ttl=10, show_spinner=False)
@@ -447,6 +474,7 @@ BTN_HELP = {"up": "현재가가 매도가능(곡선상한)에 닿으면 남은 �
             "mid": "추세가 하락 중일 때 현재가가 중간값(곡선)에 닿으면 절반 매도",
             "low": "현재가가 매수가능(곡선하한)에 닿으면 '자동매수 1회 금액'만큼 매수"}
 BTN_TAG = {"up": "매도", "mid": "중간", "low": "매수"}       # 리스트 줄에 붙는 작은 표시
+BTN_LABEL = {"up": "자동매도", "mid": "중간자동매도", "low": "자동매수"}   # 펼친 칸의 버튼 이름
 
 
 def _trade_ctx():
@@ -525,7 +553,7 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
         with st.container(key=f"tbtn_{m}"):
             for col, k in zip(st.columns(3), ("up", "mid", "low")):
                 is_on = bool(rule.get(k))
-                col.button(f"{trader.BTN_NAME[k]} 취소" if is_on else trader.BTN_NAME[k], key=f"btn_{k}_{m}",
+                col.button(f"{BTN_LABEL[k]} 취소" if is_on else BTN_LABEL[k], key=f"btn_{k}_{m}",
                            type="primary" if is_on else "secondary", width="stretch",
                            on_click=_on_toggle, args=(m, k, kr), help=BTN_HELP[k])
 
@@ -652,7 +680,7 @@ def trade_panel():
                 return px(r["bands"][k]) if r.get("bands") else "-"
             st.dataframe(pd.DataFrame([{
                 "코인": r.get("name"),
-                "켜진 버튼": " ".join(trader.BTN_NAME[k] for k in ("up", "mid", "low") if r.get(k)) or "-",
+                "켜진 버튼": " ".join(BTN_LABEL[k] for k in ("up", "mid", "low") if r.get(k)) or "-",
                 "상태": r.get("state"), "현재가": px(eng.last_prices.get(r["market"])),
                 "추세": ("▼하락" if r["bands"]["falling"] else "▲상승") if r.get("bands") else "-",
                 "매도가능": bv(r, "up"), "중간값": bv(r, "mid"), "매수가능": bv(r, "low"),
