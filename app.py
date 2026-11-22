@@ -1011,14 +1011,16 @@ if not qp.get("code"):
         if part == "asof":                              # 업비트 윗줄 오른쪽: 기준 시각만
             return (LIST_CSS + '<div class="sl-top" style="justify-content:flex-end;margin:0"><span class="asof">'
                     f'<span class="pc">24시간 거래대금 TOP{TOP_N} · </span>기준 {asof}<span class="pc"> (한국시간)</span></span></div>')
-        h = [LIST_CSS, '<div class="sl-top"' + (' style="margin:0"' if part == "left" else "") + '>']
-        for k_, (label, _) in EXCH.items():
-            h.append(f'<a class="tab{" on" if k_ == XCH else ""}" href="{link(x=k_)}" target="_self">{label}</a>')
-        h.append(f'<a class="tab rf" href="{link(x=XCH, refresh=1)}" target="_self" title="시세 다시 받기">↻ 새로고침</a><span class="brk"></span>')
-        h.append(tm or '<span class="tm">⏱ 측정 중…</span>')
-        if part != "left":
-            h.append(f'<span class="asof"><span class="pc">24시간 거래대금 TOP{TOP_N} · </span>기준 {asof}<span class="pc"> (한국시간)</span></span>')
-        h.append('</div>')
+        h = [LIST_CSS]
+        if part != "table":                             # part="table": 표만 (맨 위 줄 없이) — 업비트에서 처음 읽는 동안 보여 줄 임시 표
+            h.append('<div class="sl-top"' + (' style="margin:0"' if part == "left" else "") + '>')
+            for k_, (label, _) in EXCH.items():
+                h.append(f'<a class="tab{" on" if k_ == XCH else ""}" href="{link(x=k_)}" target="_self">{label}</a>')
+            h.append(f'<a class="tab rf" href="{link(x=XCH, refresh=1)}" target="_self" title="시세 다시 받기">↻ 새로고침</a><span class="brk"></span>')
+            h.append(tm or '<span class="tm">⏱ 측정 중…</span>')
+            if part != "left":
+                h.append(f'<span class="asof"><span class="pc">24시간 거래대금 TOP{TOP_N} · </span>기준 {asof}<span class="pc"> (한국시간)</span></span>')
+            h.append('</div>')
         if not table:                                   # 업비트: 위 버튼 줄만 (리스트는 누르면 펼쳐지는 칸으로 따로 그림)
             return "".join(h)
         h.append('<div class="sl-wrap"><table><thead><tr><th class="rk">순위</th>'
@@ -1081,7 +1083,7 @@ if not qp.get("code"):
     elif len(known) < len(codes) and not st.session_state.get("_list_drawn"):
         with note.container():                                # 처음 열 때만 임시 표 (링크 없음 → 차트로 안 넘어감)
             st.caption("⏳ 매수·매도 신호를 계산하는 중입니다… (처음 한 번은 조금 걸려요)")
-            st.markdown(build(known, links=False), unsafe_allow_html=True)
+            st.markdown(build(known, links=False, part="table"), unsafe_allow_html=True)
     if len(known) < len(codes) and not UP:
         note.caption("⏳ 매수·매도 신호를 계산하는 중입니다… (처음 한 번은 조금 걸려요)")
     _t0 = time.time()
