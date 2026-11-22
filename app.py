@@ -463,6 +463,19 @@ LIST2_CSS = """<style>
 .cbtn{margin-left:auto;display:inline-block;padding:6px 14px;font-size:14px;font-weight:500;white-space:nowrap;
  border:1px solid #c9ced6;border-radius:8px;background:#fff;color:#31333f !important;text-decoration:none !important}
 .cbtn:hover{border-color:#1f4fa8;color:#1f4fa8 !important}
+.pn-top{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.pn-left{flex:0 0 auto;min-width:230px}
+.hbox{flex:1 1 420px;min-width:0;background:#f7f8fa;border:1px solid #e3e6ea;border-radius:8px;padding:8px 12px;font-size:13px;color:#333}
+.hbox .plan{margin-bottom:6px;line-height:1.5}
+.hbox .mk{display:inline-block;margin-right:6px;padding:0 5px;border-radius:3px;background:#888;color:#fff;font-size:11px}
+.hbox .hgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px 14px}
+.hbox .hgrid>div{display:flex;justify-content:space-between;gap:6px;white-space:nowrap;border-bottom:1px dashed #e3e6ea;padding:2px 0}
+.hbox .lb{color:#888}.hbox .vl{font-weight:600;font-variant-numeric:tabular-nums}
+.hbox .r{color:#e5484d}.hbox .b{color:#1a56db}.hbox .mt{color:#999;font-size:12px}
+.pn-top .cbtn{margin-left:0}
+@media (max-width:900px){.hbox .hgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:600px){.pn-left{min-width:0;flex:1 1 100%}.hbox{flex:1 1 100%;order:3}.pn-top{gap:8px}.pn-top .cbtn{position:absolute;right:12px;top:10px}.pn-left{padding-right:96px}
+ [class*="st-key-lpanel_"]{position:relative}}
 [class*="st-key-lpanel_"]{background:#fff;border-top:1px solid #e3e6ea;padding:10px 12px 12px 12px;gap:8px !important}
 [class*="st-key-lamt_"] [data-testid="stHorizontalBlock"],[class*="st-key-tbtn_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:6px !important;align-items:center}
 [class*="st-key-lamt_"] [data-testid="stColumn"],[class*="st-key-tbtn_"] [data-testid="stColumn"]{min-width:0 !important;width:auto !important}
@@ -533,6 +546,54 @@ def _on_toggle(m, k, kr):
         st.session_state.setdefault("trade_msgs", []).append(note)
 
 
+def _hold_box(eng, acc, m, sym, close) -> str:
+    """펼친 칸 가운데 상자: 자동매수 계획(예수금·1회 금액·횟수) + 이 코인 보유수량·주문가능·평균단가·매입/평가금액·손익·수익률"""
+    snap = eng.snapshot()
+    bk = snap.get("buy_krw") or 0
+    mock = snap.get("mock", True)
+    # ── 자동매수 계획 ──
+    krw = (acc or {}).get("KRW", {}).get("balance") if acc is not None else None
+    if krw is None:
+        plan = (f'자동매수 1회 <b class="r">{bk:,.0f}원</b>' if bk else '자동매수 1회 금액 <b>미정</b>') + \
+               ' · <span class="mt">예수금은 업비트 API 키를 넣으면 보여요</span>'
+    elif bk:
+        n = int(krw // bk)
+        plan = (f'예수금 <b>{krw:,.0f}원</b> 중 1회 <b class="r">{bk:,.0f}원</b>씩 '
+                f'<b class="r">{n}번</b> 매수 가능 <span class="mt">(1회 = 예수금의 {bk / krw * 100 if krw else 0:.1f}%)</span>')
+    else:
+        plan = f'예수금 <b>{krw:,.0f}원</b> · 자동매수 1회 금액 <b>미정</b>'
+    # ── 보유 ──
+    qty = avail = avg = None
+    if acc is not None:
+        a = acc.get(sym, {})
+        avail = a.get("balance", 0.0)
+        qty = avail + a.get("locked", 0.0)
+        avg = a.get("avg") or None
+    else:                                                   # 키 없음(모의): 프로그램이 '산 셈 친' 수량과 그 가격
+        r = snap["rules"].get(m, {})
+        qty = avail = r.get("held") or 0.0
+        if qty:
+            for lg in snap.get("log", []):
+                if lg.get("마켓") == m and "매수 체결" in str(lg.get("내용")) and lg.get("가격"):
+                    avg = float(lg["가격"])
+                    break
+    cost = qty * avg if (qty and avg) else 0.0
+    value = qty * close if (qty and close) else 0.0
+    pnl = value - cost if cost else 0.0
+    rate = pnl / cost * 100 if cost else 0.0
+    pc = "r" if pnl > 0 else ("b" if pnl < 0 else "")
+    d = dec_of(close)
+    def q(v):                                              # 수량: 소수 8자리까지, 끝의 0은 지움
+        return "0" if not v else f"{v:,.8f}".rstrip("0").rstrip(".")
+    cells = [("보유수량", q(qty)), ("주문가능", q(avail)), ("평균단가", f"{px(avg, d)}원" if avg else "-"),
+             ("매입금액", f"{cost:,.0f}원" if cost else "-"), ("평가금액", f"{value:,.0f}원" if value else "-"),
+             ("평가손익", f'<span class="{pc}">{pnl:+,.0f}원</span>' if cost else "-"),
+             ("수익률", f'<span class="{pc}">{rate:+.2f}%</span>' if cost else "-")]
+    grid = "".join(f'<div><span class="lb">{k}</span><span class="vl">{v}</span></div>' for k, v in cells)
+    tag = '<span class="mk">모의</span>' if mock else ""
+    return f'<div class="hbox"><div class="plan">{tag}{plan}</div><div class="hgrid">{grid}</div></div>'
+
+
 def _coin_panel(eng, acc, m, kr, sym, close, rule):
     """펼쳐진 칸: 코인·현재가 / 곡선 방향 / 상한·곡선·하한 / 보유·진행 / 매수 금액 / 버튼 3개"""
     b = rule.get("bands")                                   # 엔진이 마지막으로 계산한 값 (켜져 있을 때)
@@ -542,11 +603,6 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
             y = d["Close"].to_numpy(dtype=float).copy()
             y[-1] = close
             b = trader.bands_now(y)
-    held = None
-    if acc is not None and sym in acc:
-        held = acc[sym]["balance"] + acc[sym]["locked"]
-    elif rule.get("held"):
-        held = rule["held"]
     if b:
         arrow = ('<span style="color:#1a56db">▼ 하락</span>' if b["falling"]
                  else '<span style="color:#e5484d">▲ 상승</span>')
@@ -558,14 +614,14 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
     stt = rule.get("state") or "대기"
     stt += f' · {rule["msg"]}' if rule.get("msg") else ""
     chart = html.escape(link(code=m, name=kr, x="upbit"))
+    box = _hold_box(eng, acc, m, sym, close)
     with st.container(key=f"lpanel_{m}"):
         st.markdown(
-            f'<div style="display:flex;align-items:baseline;gap:8px">'
+            f'<div class="pn-top"><div class="pn-left">'
             f'<div style="font-size:17px;font-weight:700">{html.escape(kr)} '
             f'<span style="font-size:13px;color:#999;font-weight:400">{html.escape(sym)}</span> · {px(close)}원</div>'
-            f'<a class="cbtn" href="{chart}" target="_self">차트 보기</a></div>'
-            f'{lines}<div style="font-size:13px;color:#666;margin-top:2px">보유 {"-" if held is None else f"{held:g}"} · '
-            f'진행: {html.escape(stt)}</div>', unsafe_allow_html=True)
+            f'{lines}<div style="font-size:13px;color:#666;margin-top:2px">진행: {html.escape(stt)}</div></div>'
+            f'{box}<a class="cbtn" href="{chart}" target="_self">차트 보기</a></div>', unsafe_allow_html=True)
         if _locked():
             _password_box()
             return
