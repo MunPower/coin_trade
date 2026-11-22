@@ -875,14 +875,8 @@ def top_controls():
         _real_dialog()
 
 
-def list_area(rows, sig, hm, left_html, asof_html):
-    """업비트 화면 위쪽 전체: [탭·새로고침·시간 | 모의·실전·자동매매 켜기 | 기준 시각] + 누르면 펼쳐지는 리스트"""
-    with st.container(key="topbar"):
-        t1, t2, t3 = st.columns([5.2, 3.6, 2.5], vertical_alignment="center")
-        t1.markdown(left_html, unsafe_allow_html=True)
-        with t2:
-            top_controls()                                  # 모드(모의/실전) · 자동매매 켜기
-        t3.markdown(asof_html, unsafe_allow_html=True)
+def list_area(rows, sig, hm):
+    """업비트 리스트 (누르면 펼쳐짐). 맨 위 줄(탭·모의/실전·자동매매)은 데이터 읽기 전에 먼저 따로 그림"""
     short = [r for r in get_engine().snapshot()["rules"].values() if r.get("short") and r.get("low")]
     if short:                                               # 예수금이 모자라 주문하지 않고 기다리는 코인 알림
         names = ", ".join(html.escape(r.get("name") or r["market"]) for r in short)
@@ -1069,6 +1063,17 @@ if not qp.get("code"):
     known = known_signals(codes, days)                        # 보관된 신호(받기·계산 없이 바로)
     # 업비트는 화면 칸의 순서를 매번 똑같이 유지: [① 임시 안내 칸] [② 버튼 줄+리스트] [③ 아래 안내·기록]
     # 다시 계산하는 동안에는 ①만 쓰고 ②는 건드리지 않음 → 이전 리스트(펼친 칸 포함)가 그대로 보여서 접혔다 펴지지 않음
+    left_ph = None
+    if UP:
+        # 맨 위 줄을 가장 먼저 그림 → 새로고침해도 [모의][실전][자동매매] 버튼이 바로 보임 (걸린 시간은 다 읽은 뒤 채움)
+        st.markdown(LIST2_CSS, unsafe_allow_html=True)
+        with st.container(key="topbar"):
+            t1, t2, t3 = st.columns([5.2, 3.6, 2.5], vertical_alignment="center")
+            left_ph = t1.empty()
+            left_ph.markdown(build(known, "", table=False, part="left"), unsafe_allow_html=True)
+            with t2:
+                top_controls()                              # 모드(모의/실전) · 자동매매 켜기
+            t3.markdown(build(known, part="asof"), unsafe_allow_html=True)
     note = st.empty()
     ph = None if UP else st.empty()
     if not UP:
@@ -1099,7 +1104,8 @@ if not qp.get("code"):
     _tm = timing_html([("리스트", t_list), ("시세", t_fetch), ("계산", t_calc), ("전체", time.time() - _t0)])
     if UP:
         note.empty()
-        list_area_part(rows, sig, hm, build(sig, _tm, table=False, part="left"), build(sig, part="asof"))   # ②
+        left_ph.markdown(build(sig, _tm, table=False, part="left"), unsafe_allow_html=True)   # 걸린 시간 채움
+        list_area_part(rows, sig, hm)                                                        # ② 리스트
         st.session_state["_list_drawn"] = True
         for w in warn:
             st.caption(w)
