@@ -38,7 +38,14 @@ PENDING = (BUYING, SELLING)
 
 
 class UpbitError(Exception):
-    pass
+    def __init__(self, msg: str, status: int = 0):
+        super().__init__(msg)
+        self.status = status
+
+    @property
+    def temporary(self) -> bool:
+        """업비트 서버 쪽 일시 문제(5xx)나 요청 과다(429)면 True → 멈추지 않고 다음 차례에 다시 시도"""
+        return self.status >= 500 or self.status == 429
 
 
 # ───────────── 인증 (JWT, HS256) ─────────────
@@ -82,9 +89,9 @@ class Upbit:
                     msg = f"{e.get('name', '')}: {e.get('message', '')}".strip(": ")
                 except Exception:
                     msg = r.text[:200]
-                raise UpbitError(f"[{r.status_code}] {msg}")
+                raise UpbitError(f"[{r.status_code}] {msg}", r.status_code)
             return r.json()
-        raise UpbitError("요청이 너무 많아 잠시 막혔습니다")
+        raise UpbitError("요청이 너무 많아 잠시 막혔습니다", 429)
 
     def accounts(self) -> dict:
         """{'KRW': {'balance': 사용가능, 'locked': 주문중, 'avg': 평균단가}, 'BTC': {...}}"""
@@ -95,7 +102,8 @@ class Upbit:
                                   "avg": float(a.get("avg_buy_price") or 0)}
         return out
 
-    def limit_order(self, market: str, side: str, volume: Decimal, price: Decimal, tif: str | None = "fok") -> dict:
+    def limit_order(self, market: str, side: str, volume: Decimal, price: Decimal, tif: str | None = "fok",
+                    ident: str | None = None) -> dict:
         """지정가 주문. side = 'bid'(매수) / 'ask'(매도)
         tif='fok' (Fill or Kill): 그 가격 안에서 '전부' 체결될 수 있을 때만 체결, 아니면 하나도 체결하지 않고 바로 취소
         → 일부만 체결돼 5,000원 미만 자투리가 남거나, 주문이 업비트에 걸린 채 남는 일이 없음"""
@@ -103,10 +111,12 @@ class Upbit:
                 "volume": fmt_dec(volume), "price": fmt_dec(price)}
         if tif:
             body["time_in_force"] = tif
+        if ident:
+            body["identifier"] = ident                  # 내가 정한 주문번호 (한 번 쓴 번호는 업비트가 다시 받지 않음)
         return self._req("POST", "/v1/orders", body)
 
-    def get_order(self, uid: str) -> dict:
-        return self._req("GET", "/v1/order", {"uuid": uid})
+    def get_order(self, uid: str | None = None, ident: str | None = None) -> dict:
+        return self._req("GET", "/v1/order", {"uuid": uid} if uid else {"identifier": ident})
 
     def cancel(self, uid: str) -> dict:
         return self._req("DELETE", "/v1/order", {"uuid": uid})
@@ -133,9 +143,10 @@ def prices(markets: list) -> dict:
 
 
 # ───────────── 호가 단위 (주문 가격은 이 단위에 맞아야 함) ─────────────
-TICKS = [(2_000_000, "1000"), (1_000_000, "500"), (500_000, "100"), (100_000, "50"), (10_000, "10"),
-         (1_000, "1"), (100, "0.1"), (10, "0.01"), (1, "0.001"), (0.1, "0.0001"), (0.01, "0.00001"),
-         (0.001, "0.000001"), (0.0001, "0.0000001"), (0, "0.00000001")]
+# 업비트 원화마켓 호가 단위 (업비트 개발자 문서 기준). 실제 주문 때는 업비트 '호가 정책 조회'로 받은 값을 먼저 씀
+TICKS = [(1_000_000, "1000"), (500_000, "500"), (100_000, "100"), (50_000, "50"), (10_000, "10"),
+         (5_000, "5"), (100, "1"), (10, "0.1"), (1, "0.01"), (0.1, "0.001"), (0.01, "0.0001"),
+         (0.001, "0.00001"), (0.0001, "0.000001"), (0.00001, "0.0000001"), (0, "0.00000001")]
 _inst_cache: dict = {}        # {마켓: (받은 시각, 현재가 구간의 호가 단위)}
 
 
@@ -195,6 +206,8 @@ def order_price(market: str, side: str, ask: float, bid: float, now_price: float
     d = Decimal(str(base)) + (t * SLIP_TICKS if side == "bid" else -t * SLIP_TICKS)
     if d <= 0:
         d = t
+    if _band(float(d)) != _band(base):                  # 2호가를 더하다 가격 구간이 바뀌면 바뀐 구간의 호가 단위로 맞춤
+        t = _table_tick(float(d))
     q = (d / t).to_integral_value(ROUND_DOWN if side == "bid" else ROUND_UP)   # 호가 단위에 맞춤
     return (q * t).normalize()
 
@@ -553,10 +566,13 @@ class Engine:
                     r["bands"] = b
                     self._advance(r, p, b, acc)
                 except UpbitError as e:
-                    r.update(state=ERROR, msg=str(e))
-                    self._log(r, "오류", p, None, str(e))
+                    if e.temporary:                              # 업비트 서버 일시 문제 → 3초 뒤 다시
+                        r["msg"] = f"업비트 일시 오류 — 다시 시도: {e}"
+                    else:                                        # 주문 거절 등 → 이 코인은 멈추고 알림
+                        r.update(state=ERROR, msg=str(e))
+                        self._log(r, "오류", p, None, str(e))
                 except Exception as e:
-                    r["msg"] = f"일시 오류: {e}"
+                    r["msg"] = f"일시 오류(인터넷 등) — 다시 시도: {e}"
             self._save()
 
     # ── 한 코인 한 칸 진행 ──
@@ -602,16 +618,20 @@ class Engine:
         if s == BUYING:
             if mock:
                 return
-            o = self.client.get_order(r["order"])
-            ex = float(o.get("executed_volume") or 0)
             add = r.get("kind") == "add"
             what = "추가매수" if add else "자동매수"
+            o = self._fetch_order(r)
+            if o is None:                                  # 업비트에 주문이 없음 = 안 들어감 → 원래대로 (다음 차례에 다시)
+                r.update(state=HOLD if add else WAIT, order=None, ident=None, kind=None,
+                         msg="주문이 들어가지 않았어요 — 조건이 맞으면 다시 시도")
+                return
+            ex = float(o.get("executed_volume") or 0)
             if o["state"] in ("done", "cancel") and ex > 0:
                 ap = _avg_price(o) or 0.0
                 self._bought(r, ex, ap, (r.get("bands") or {}).get("day") or trading_day(), add)
                 self._log(r, what + " 체결", ap, ex, self._nth(r))
             elif o["state"] in ("done", "cancel"):           # FOK: 그 가격 안에 물량이 모자라 하나도 안 사고 취소됨
-                r.update(state=HOLD if add else WAIT, order=None, kind=None,
+                r.update(state=HOLD if add else WAIT, order=None, ident=None, kind=None,
                          msg="호가 물량이 모자라 체결 안 됨(FOK 취소) — 3초 뒤 다시 시도")
                 if not r.get("miss"):
                     r["miss"] = True
@@ -625,7 +645,7 @@ class Engine:
             if not mock:
                 a_ = (acc or {}).get(m[4:], {})
                 bal = a_.get("balance", 0.0)
-                if (bal + a_.get("locked", 0.0)) * p < MIN_ORDER_KRW:
+                if (bal + a_.get("locked", 0.0)) < held * 0.1 and (bal + a_.get("locked", 0.0)) * p < MIN_ORDER_KRW:
                     # 업비트 앱에서 직접 팔았거나(전부/대부분) 남은 게 5,000원 미만 → 더 팔 수 없으니 이 코인 매매를 정리
                     nxt = self._after_all(r)
                     r.update(state=nxt, held=0.0, half_done=False, order=None, kind=None, miss=False, dust=False,
@@ -673,9 +693,10 @@ class Engine:
                 self._log(r, what + " 체결(모의)", float(price), float(vol))
                 self._sold(r, kind, float(vol), f"{what} {fmt_dec(price)}원(모의)")
             else:
-                o = self.client.limit_order(m, "ask", vol, price)
-                r.update(state=SELLING, order=o["uuid"], kind=kind, held=float(vol) if kind == "up" else r.get("held"),
-                         msg=f"{what} 주문 {fmt_dec(price)}원 (FOK)")
+                if kind == "up":
+                    r["held"] = float(vol)
+                if self._send(r, m, "ask", vol, price, SELLING, kind, HOLD):
+                    r["msg"] = f"{what} 주문 {fmt_dec(price)}원 (FOK)"
                 if not r.get("miss"):
                     self._log(r, what + " 주문", float(price), float(vol), "매수1호가-2호가 · 전량 체결 아니면 취소(FOK)")
             return
@@ -683,7 +704,11 @@ class Engine:
         if s == SELLING:
             if mock:
                 return
-            o = self.client.get_order(r["order"])
+            o = self._fetch_order(r)
+            if o is None:
+                r.update(state=HOLD, order=None, ident=None, kind=None,
+                         msg="매도 주문이 들어가지 않았어요 — 조건이 맞으면 다시 시도")
+                return
             ex = float(o.get("executed_volume") or 0)
             what = "중간자동매도(절반)" if r.get("kind") == "mid" else "자동매도(전체)"
             if o["state"] in ("done", "cancel") and ex > 0:
@@ -691,7 +716,7 @@ class Engine:
                 self._log(r, what + " 체결", _avg_price(o), ex)
                 self._sold(r, r.get("kind"), ex, f"{what} 체결 {ex:g}개")
             elif o["state"] in ("done", "cancel"):           # FOK: 물량이 모자라 하나도 안 팔고 취소됨 → 다음 차례에 다시
-                r.update(state=HOLD, order=None, kind=None,
+                r.update(state=HOLD, order=None, ident=None, kind=None,
                          msg="호가 물량이 모자라 체결 안 됨(FOK 취소) — 3초 뒤 다시 시도")
                 if not r.get("miss"):
                     r["miss"] = True
@@ -731,13 +756,47 @@ class Engine:
                 self._log(r, "예수금 부족 — 주문 안 함", float(price), float(vol),
                           f"필요 {need:,.0f}원 / 있음 {krw:,.0f}원")
             return
-        o = self.client.limit_order(m, "bid", vol, price)
+        sent = self._send(r, m, "bid", vol, price, BUYING, "add" if add else "low", HOLD if add else WAIT)
         if acc is not None and "KRW" in acc:           # 같은 3초 안의 다음 코인이 이 돈을 또 쓰지 않게 바로 뺌
             acc["KRW"]["balance"] = krw - need
         r["short"] = False
-        r.update(state=BUYING, order=o["uuid"], kind="add" if add else "low", msg=f"{what} 주문 {fmt_dec(price)}원 (FOK)")
+        if sent:
+            r["msg"] = f"{what} 주문 {fmt_dec(price)}원 (FOK)"
         if not r.get("miss"):                          # 체결 못 하고 다시 시도하는 중이면 기록을 쌓지 않음
             self._log(r, what + " 주문", float(price), float(vol), "매도1호가+2호가 · 전량 체결 아니면 취소(FOK)")
+
+    def _send(self, r: dict, m: str, side: str, vol: Decimal, price: Decimal, state: str, kind: str, back: str) -> bool:
+        """주문 보내기. 먼저 '주문 중' 상태와 내 주문번호를 저장하고 보냄
+        - 업비트가 거절(4xx)하면: 원래 상태(back)로 되돌리고 오류
+        - 인터넷이 끊겨 답을 못 받으면: '주문 중' 그대로 두고, 다음 차례에 내 주문번호로 업비트에 조회 (다시 보내지 않음)"""
+        ident = f"c2-{uuid.uuid4().hex[:28]}"
+        r.update(state=state, order=None, ident=ident, kind=kind)
+        self._save()
+        try:
+            o = self.client.limit_order(m, side, vol, price, ident=ident)
+        except UpbitError:
+            r.update(state=back, order=None, ident=None, kind=None)
+            raise
+        except Exception as e:                          # 인터넷 끊김·시간 초과: 주문이 들어갔는지 모름 → 조회로 확인
+            r["msg"] = f"주문 결과 확인 중 (인터넷 문제: {type(e).__name__}) — 다시 보내지 않고 조회합니다"
+            return False
+        r["order"] = o.get("uuid")
+        return True
+
+    def _fetch_order(self, r: dict):
+        """'주문 중'인 주문 조회. uuid를 모르면 내 주문번호로 조회. 업비트에 없으면 None (주문이 안 들어간 것)"""
+        if r.get("order"):
+            return self.client.get_order(r["order"])
+        if r.get("ident"):
+            try:
+                o = self.client.get_order(ident=r["ident"])
+            except UpbitError as e:
+                if e.status == 404:
+                    return None
+                raise
+            r["order"] = o.get("uuid")
+            return o
+        return None
 
     def _nth(self, r: dict) -> str:
         return f"매수 {r.get('buys', 0)}/{self.max_buys(r)}회"
@@ -751,7 +810,7 @@ class Engine:
         held = (r.get("held") or 0.0) if add else 0.0
         r.update(state=HOLD, held=held + vol, buys=(r.get("buys") or 0) + 1 if add else 1,
                  last_buy=price, last_buy_day=day, half_done=False, dust=False, miss=False,
-                 close_ok=False, add_ok=False, order=None, kind=None,
+                 close_ok=False, add_ok=False, order=None, ident=None, kind=None,
                  msg=f"{'추가매수' if add else '자동매수'} 체결 {price:,.8g}원")
 
     def _maybe_add(self, r: dict, m: str, p: float, b: dict, acc: dict | None):
@@ -805,34 +864,43 @@ class Engine:
     def _sold(self, r: dict, kind: str, vol: float, msg: str):
         left = max((r.get("held") or 0) - vol, 0.0)
         if kind == "mid" and left > 1e-12:
-            r.update(state=HOLD, held=left, half_done=True, order=None, kind=None, msg=msg)
+            r.update(state=HOLD, held=left, half_done=True, order=None, ident=None, kind=None, msg=msg)
         else:
-            r.update(state=self._after_all(r), held=0.0, half_done=False, order=None, kind=None,
+            r.update(state=self._after_all(r), held=0.0, half_done=False, order=None, ident=None, kind=None,
                      buys=0, last_buy=None, last_buy_day=None,
                      msg=msg + (" → 다시 자동매수 대기" if r.get("low") else ""))
 
     def _cancel(self, r: dict, why: str):
-        if self.data["mock"] or not r.get("order"):
+        if self.data["mock"] or not (r.get("order") or r.get("ident")):
             r.update(state=WAIT if (r.get("state") == BUYING and r.get("kind") != "add") else HOLD,
-                     order=None, kind=None, msg=why)
+                     order=None, ident=None, kind=None, msg=why)
             return
         try:
-            self.client.cancel(r["order"])
-        except UpbitError as e:
-            r["msg"] = f"취소 실패: {e}"
-        try:
-            ex = float(self.client.get_order(r["order"]).get("executed_volume") or 0)
-        except Exception:
-            ex = 0.0
+            o = self._fetch_order(r)
+        except Exception as e:
+            r["msg"] = f"주문 조회가 안 돼서 다음에 다시 확인합니다: {e}"   # 상태는 그대로 → 다음 차례에 결과 확인
+            return
+        if o is None:                                      # 주문이 들어가지 않았음
+            r.update(state=WAIT if (r.get("state") == BUYING and r.get("kind") != "add") else HOLD,
+                     order=None, ident=None, kind=None, msg=why)
+            return
+        if o.get("state") == "wait":                       # 아직 걸려 있으면 취소 (FOK라 거의 없음)
+            try:
+                self.client.cancel(r["order"])
+                o = self.client.get_order(r["order"])
+            except Exception as e:
+                r["msg"] = f"취소 확인이 안 돼서 다음에 다시 확인합니다: {e}"
+                return
+        ex = float(o.get("executed_volume") or 0)
         if r["state"] == BUYING and r.get("kind") == "add":       # 추가매수 주문 취소: 원래 들고 있던 건 그대로
             if ex > 0:
                 r["held"] = (r.get("held") or 0.0) + ex
                 r["buys"] = (r.get("buys") or 1) + 1
-            r.update(state=HOLD, order=None, kind=None, msg=why)
+            r.update(state=HOLD, order=None, ident=None, kind=None, msg=why)
         elif r["state"] == BUYING:
-            r.update(state=HOLD if ex > 0 else WAIT, held=ex, half_done=False, order=None, kind=None, msg=why,
-                     buys=1 if ex > 0 else 0)
+            r.update(state=HOLD if ex > 0 else WAIT, held=ex, half_done=False, order=None, ident=None, kind=None, msg=why,
+                     buys=1 if ex > 0 else 0, last_buy=_avg_price(o) if ex > 0 else None)
         else:
             left = max((r.get("held") or 0) - ex, 0.0)
-            r.update(state=HOLD if left > 0 else self._after_all(r), held=left, order=None, kind=None, msg=why)
+            r.update(state=HOLD if left > 0 else self._after_all(r), held=left, order=None, ident=None, kind=None, msg=why)
         self._log(r, "주문 취소", None, ex, why)
