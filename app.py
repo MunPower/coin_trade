@@ -618,12 +618,12 @@ def _on_add_set(m, kr, dn, dp):
 
 
 def _on_click_all(m, kr):
-    """이 코인의 자동매도·중간자동매도·자동매수를 모두 켬"""
+    """이 코인의 자동매도·중간자동매도·자동매수·추가매수를 모두 켬"""
     eng = get_engine()
     if not (eng.snapshot().get("buy_krw") or 0) >= trader.MIN_ORDER_KRW:
         eng.set_buy_krw(DEFAULT_BUY_KRW)
     rule = eng.snapshot()["rules"].get(m, {})
-    for k in ("up", "mid", "low"):
+    for k in ("up", "mid", "low", "add"):
         if not rule.get(k):
             note = eng.toggle(m, k, kr)
             if note:
@@ -750,7 +750,7 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
                                  if any_on else "켜져 있는 버튼이 없어요"))
             cols[1].button("모두 실행", key=f"btn_allon_{m}", width="stretch", on_click=_on_click_all, args=(m, kr),
                            disabled=not on_all,
-                           help=off_tip if not on_all else "이 코인의 자동매도 · 중간자동매도 · 자동매수를 한 번에 모두 켭니다")
+                           help=off_tip if not on_all else "이 코인의 자동매도 · 중간자동매도 · 자동매수 · 추가매수를 한 번에 모두 켭니다")
             for col, k in zip(cols[2:], ("up", "mid", "low")):
                 is_on = bool(rule.get(k))
                 val = f"({px(b[k])})" if b else ""                 # 자동매도(매도가능 값) · 중간자동매도(중간값) · 자동매수(매수가능 값)

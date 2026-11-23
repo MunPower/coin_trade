@@ -757,8 +757,22 @@ class Engine:
     def _maybe_add(self, r: dict, m: str, p: float, b: dict, acc: dict | None):
         """추가매수: 하루 한 번, 직전 매수 가격보다 N% 더 내려가고 매수가능 값 아래일 때.
         ▲상승 추세면 닿으면 바로, ▼하락 추세면 다음 날 09:00에 어제 종가로 판단 (처음 매수와 같은 규칙)"""
-        if not (r.get("low") and r.get("add") and r.get("last_buy")):
+        if not (r.get("low") and r.get("add")):
             return
+        if not r.get("last_buy"):
+            # 이 버전 전에 산 코인: 기준 가격이 없음 → 실전은 업비트 평균단가, 모의는 매매 기록의 마지막 매수 가격으로 대신
+            lb = None
+            if acc is not None:
+                lb = (acc.get(m[4:]) or {}).get("avg") or None
+            if not lb:
+                for lg in self.data.get("log", []):
+                    if lg.get("마켓") == m and "매수 체결" in str(lg.get("내용")) and lg.get("가격"):
+                        lb = float(lg["가격"])
+                        break
+            if not lb:
+                r["msg"] += " · 추가매수 기준 가격을 몰라서 시작할 수 없어요"
+                return
+            r["last_buy"], r["buys"] = float(lb), max(1, int(r.get("buys") or 0))
         n, mx = r.get("buys") or 1, self.max_buys(r)
         if n >= mx:
             r["msg"] = f"보유 중 · {mx}번 모두 매수"
