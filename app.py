@@ -466,7 +466,7 @@ LIST2_CSS = """<style>
 .cl-row .nm .sub{display:flex;flex-wrap:wrap;align-items:center;gap:2px 3px;font-size:11px;font-weight:400;color:#999;white-space:normal}
 /* 켜진 버튼 표시: 코인 영문 옆(둘째 줄)에 붙이고, 칸이 좁으면 다음 줄로 넘어감 → 잘리지 않음 */
 .cl-row .nm .on{display:inline-block;padding:0 4px;border-radius:3px;color:#fff;font-size:10px;font-weight:600;line-height:15px}
-.cl-row .nm .on.short{background:#f59f00}.cl-row .nm .on.up{background:#1a56db}.cl-row .nm .on.mid{background:#444}.cl-row .nm .on.low{background:#e5484d}
+.cl-row .nm .on.short{background:#f59f00}.cl-row .nm .on.add{background:#c2410c}.cl-row .nm .on.up{background:#1a56db}.cl-row .nm .on.mid{background:#444}.cl-row .nm .on.low{background:#e5484d}
 .cl-row .sg{justify-content:center;font-weight:800}.cl-row .sg.buy{color:#e5484d}.cl-row .sg.sell{color:#1a56db}
 .cl-row .tv{color:#333}
 .cl-row .hm{font-size:11px;color:#999;font-weight:400;margin-left:4px}
@@ -512,6 +512,22 @@ LIST2_CSS = """<style>
 @media (max-width:600px){[class*="st-key-lamt_"] [data-testid="stHorizontalBlock"]{flex-wrap:wrap !important}
  [class*="st-key-lamt_"] [data-testid="stColumn"]:nth-child(5){flex:1 1 100% !important}}
 .bkinfo{font-size:13px;color:#666}.bkinfo b{color:#e5484d}
+.bkval.add{color:#c2410c !important;font-size:15px}
+[class*="st-key-ladd_"]{background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:6px 10px}
+[class*="st-key-ladd_"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important;gap:6px !important;align-items:center}
+[class*="st-key-ladd_"] [data-testid="stColumn"]{min-width:0 !important;width:auto !important;flex:0 0 auto !important}
+[class*="st-key-ladd_"] [data-testid="stColumn"]:nth-child(2),[class*="st-key-ladd_"] [data-testid="stColumn"]:nth-child(4),
+[class*="st-key-ladd_"] [data-testid="stColumn"]:nth-child(5),[class*="st-key-ladd_"] [data-testid="stColumn"]:nth-child(7){flex:0 0 40px !important}
+[class*="st-key-ladd_"] [data-testid="stColumn"]:nth-child(3){flex:0 0 74px !important}
+[class*="st-key-ladd_"] [data-testid="stColumn"]:nth-child(6){flex:0 0 56px !important}
+[class*="st-key-ladd_"] [data-testid="stColumn"]:nth-child(8){flex:1 1 auto !important}
+[class*="st-key-adm_"] button,[class*="st-key-adp_"] button,[class*="st-key-apm_"] button,[class*="st-key-app_"] button{min-height:34px;padding:0 !important}
+[class*="st-key-adm_"] button p,[class*="st-key-adp_"] button p,[class*="st-key-apm_"] button p,[class*="st-key-app_"] button p{font-size:18px !important;font-weight:700}
+[class*="st-key-btn_add_"] button p{color:#c2410c !important}
+[class*="st-key-btn_add_"] button{border-color:#fdba74 !important}
+[class*="st-key-btn_add_"] button[kind="primary"],[class*="st-key-btn_add_"] [data-testid="stBaseButton-primary"]{background:#fff1e6 !important;border:2px solid #c2410c !important}
+@media (max-width:600px){[class*="st-key-ladd_"] [data-testid="stHorizontalBlock"]{flex-wrap:wrap !important}
+ [class*="st-key-ladd_"] [data-testid="stColumn"]:nth-child(8){flex:1 1 100% !important}}
 .bkval{font-size:17px;font-weight:700;color:#e5484d;text-align:center;white-space:nowrap}.bkval.mt{color:#999;font-size:15px}
 [class*="st-key-bkm_"] button,[class*="st-key-bkp_"] button{min-height:34px;padding:0 !important;font-weight:700}
 [class*="st-key-bkm_"] button p,[class*="st-key-bkp_"] button p{font-size:18px !important}
@@ -540,7 +556,7 @@ BTN_HELP = {"up": "현재가가 매도가능(곡선상한)에 닿으면 남은 �
             "mid": "추세가 하락 중일 때 현재가가 중간값(곡선)에 닿으면 절반 매도",
             "low": "▲상승 추세: 매수가능(곡선하한)에 닿으면 바로 매수 · "
                    "▼하락 추세: 다음 날 09:00에 어제 종가가 매수가능 값 아래였으면 매수"}
-BTN_TAG = {"up": "매도", "mid": "중간", "low": "매수"}       # 리스트 줄에 붙는 작은 표시
+BTN_TAG = {"up": "매도", "mid": "중간", "low": "매수", "add": "추가"}       # 리스트 줄에 붙는 작은 표시
 BTN_LABEL = {"up": "자동매도", "mid": "중간자동매도", "low": "자동매수"}   # 펼친 칸의 버튼 이름
 
 
@@ -592,6 +608,15 @@ def _on_amount_step(step):
     eng.set_buy_krw(new)
 
 
+def _on_add_set(m, kr, dn, dp):
+    """추가매수 횟수(dn) · 하락 기준 %(dp) 바꾸기"""
+    eng = get_engine()
+    r = eng.snapshot()["rules"].get(m, {})
+    n = int(r.get("add_n") or trader.ADD_N_DEFAULT) + dn
+    p = float(r.get("add_pct") or trader.ADD_PCT_DEFAULT) + dp
+    eng.set_add(m, kr, n=n, pct=p)
+
+
 def _on_click_all(m, kr):
     """이 코인의 자동매도·중간자동매도·자동매수를 모두 켬"""
     eng = get_engine()
@@ -609,7 +634,7 @@ def _on_cancel_all(m, kr):
     """이 코인의 켜진 버튼(자동매도·중간자동매도·자동매수)을 모두 끔. 걸려 있던 주문도 같이 취소됨"""
     eng = get_engine()
     rule = eng.snapshot()["rules"].get(m, {})
-    for k in ("up", "mid", "low"):
+    for k in ("up", "mid", "low", "add"):
         if rule.get(k):
             note = eng.toggle(m, k, kr)
             if note:
@@ -717,11 +742,11 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
             st.markdown('<div class="offnote">⏸ 자동매매가 꺼져 있어서 버튼을 누를 수 없어요. '
                         '맨 위 <b>[○ 자동매매 꺼짐]</b>을 눌러 켜 주세요.</div>', unsafe_allow_html=True)
         with st.container(key=f"tbtn_{m}"):
-            cols = st.columns(5)
-            any_on = any(rule.get(k) for k in ("up", "mid", "low"))
+            cols = st.columns(6)
+            any_on = any(rule.get(k) for k in ("up", "mid", "low", "add"))
             cols[0].button("모두 취소", key=f"btn_all_{m}", width="stretch", on_click=_on_cancel_all, args=(m, kr),
                            disabled=not on_all,
-                           help=(off_tip if not on_all else "이 코인의 자동매도 · 중간자동매도 · 자동매수를 한 번에 모두 끕니다"
+                           help=(off_tip if not on_all else "이 코인의 자동매도 · 중간자동매도 · 자동매수 · 추가매수를 한 번에 모두 끕니다"
                                  if any_on else "켜져 있는 버튼이 없어요"))
             cols[1].button("모두 실행", key=f"btn_allon_{m}", width="stretch", on_click=_on_click_all, args=(m, kr),
                            disabled=not on_all,
@@ -733,6 +758,14 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
                 col.button(label, key=f"btn_{k}_{m}", disabled=not on_all,
                            type="primary" if is_on else "secondary", width="stretch",
                            on_click=_on_toggle, args=(m, k, kr), help=off_tip if not on_all else BTN_HELP[k])
+            add_on = bool(rule.get("add"))
+            an, ap = int(rule.get("add_n") or trader.ADD_N_DEFAULT), float(rule.get("add_pct") or trader.ADD_PCT_DEFAULT)
+            cols[5].button(f"추가매수(총{an}번·-{ap:g}%)" + (" 취소" if add_on else ""), key=f"btn_add_{m}",
+                           disabled=not on_all, type="primary" if add_on else "secondary", width="stretch",
+                           on_click=_on_toggle, args=(m, "add", kr),
+                           help=off_tip if not on_all else
+                           f"자동매수로 산 뒤, 직전 매수 가격보다 {ap:g}%씩 더 내려가고 매수가능 값 아래면 하루 한 번 더 삽니다 "
+                           f"(처음 매수 포함 최대 {an}번). 꺼져 있으면 1번만 사요.")
         # ── 자동매수 1회 금액 (모든 코인 공통): [−] 금액 [+] 버튼 — 입력칸이 아니라 버튼이라 값이 저절로 바뀌지 않음 ──
         bk = int(eng.snapshot().get("buy_krw") or 0)
         krw = (acc or {}).get("KRW", {}).get("balance") if acc is not None else None
@@ -753,6 +786,35 @@ def _coin_panel(eng, acc, m, kr, sym, close, rule):
             else:
                 info = "모든 코인에 같은 금액이 적용돼요"
             c4.markdown(f'<div class="bkinfo">{info}</div>', unsafe_allow_html=True)
+        # ── 추가매수 설정 (코인마다): 총 몇 번 · 직전 매수가보다 몇 % 더 내려가면 ──
+        with st.container(key=f"ladd_{m}"):
+            d0, d1, d2, d3, d4, d5, d6, d7 = st.columns([1.0, 0.4, 0.8, 0.4, 0.4, 0.8, 0.4, 3], vertical_alignment="center")
+            d0.markdown('<div style="font-size:14px;font-weight:600;color:#c2410c;white-space:nowrap">추가매수</div>',
+                        unsafe_allow_html=True)
+            d1.button("−", key=f"adm_{m}", width="stretch", on_click=_on_add_set, args=(m, kr, -1, 0),
+                      disabled=not on_all or an <= 2, help="횟수 줄이기 (최소 총 2번)")
+            d2.markdown(f'<div class="bkval add">총 {an}번</div>', unsafe_allow_html=True)
+            d3.button("+", key=f"adp_{m}", width="stretch", on_click=_on_add_set, args=(m, kr, 1, 0),
+                      disabled=not on_all or an >= 10, help="횟수 늘리기 (최대 총 10번)")
+            d4.button("−", key=f"apm_{m}", width="stretch", on_click=_on_add_set, args=(m, kr, 0, -1),
+                      disabled=not on_all or ap <= 1, help="하락 기준 1%p 줄이기")
+            d5.markdown(f'<div class="bkval add">-{ap:g}%</div>', unsafe_allow_html=True)
+            d6.button("+", key=f"app_{m}", width="stretch", on_click=_on_add_set, args=(m, kr, 0, 1),
+                      disabled=not on_all or ap >= 50, help="하락 기준 1%p 늘리기")
+            buys, lb = int(rule.get("buys") or 0), rule.get("last_buy")
+            if rule.get("state") in ("보유", "매도주문", "매수주문") and buys and add_on:
+                if buys >= an:
+                    ainfo = f"<b>{an}번 모두 매수</b> · 다 팔면 다시 1번째부터"
+                elif lb:
+                    ainfo = (f"매수 <b>{buys}/{an}회</b> · {buys + 1}번째: <b>{lb * (1 - ap / 100):,.{dec_of(close)}f}원 이하</b>"
+                             f" + 매수가능 값 아래 (하루 한 번)")
+                else:
+                    ainfo = f"매수 <b>{buys}/{an}회</b>"
+            else:
+                need = f" · 최대 {an}×{bk:,}={an * bk:,}원 필요" if bk else ""
+                ainfo = (f"켜면: 1번째 매수 뒤 직전 매수가보다 {ap:g}%씩 더 내려갈 때마다 하루 한 번 더 매수{need}"
+                         if not add_on else f"켜져 있음: 자동매수가 체결되면 시작{need}")
+            d7.markdown(f'<div class="bkinfo">{ainfo}</div>', unsafe_allow_html=True)
         for msg in st.session_state.pop("_panel_msgs", []):
             st.warning(msg)
 
@@ -798,9 +860,12 @@ def trade_list(rows, sig, hm=None):
             k = "eq" if pct is None else ("up" if pct > 0 else ("dn" if pct < 0 else "eq"))
             arrow = "" if not pct else ("▲ " if pct > 0 else "▼ ")
             pct_t = "-" if pct is None else f"{pct:+.2f}%" if pct else "0.00%"
-            ons = ('<span class="on short">예수금 부족</span>' if rule.get("short") and rule.get("low") else "") + \
+            nb = int(rule.get("buys") or 0)
+            ons = (f'<span class="on add">매수 {nb}/{int(rule.get("add_n") or trader.ADD_N_DEFAULT)}</span>'
+                   if rule.get("add") and nb else "") + \
+                ('<span class="on short">예수금 부족</span>' if rule.get("short") and rule.get("low") else "") + \
                 "".join(f'<span class="on {b_}">{BTN_TAG[b_]}</span>'
-                          for b_ in ("up", "mid", "low") if rule.get(b_))          # 켜져 있는 버튼 표시
+                          for b_ in ("up", "mid", "low", "add") if rule.get(b_))          # 켜져 있는 버튼 표시
             cls = "cl-row" + (" open" if opened == m else (" ev" if i % 2 == 0 else ""))
             with st.container(key=f"lrow_{m}"):
                 st.markdown(

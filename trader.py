@@ -316,8 +316,9 @@ def closes(market: str, days: int = CALC_DAYS) -> np.ndarray:
 #   곡선(mid)    실행 → 곡선이 '하락' 중일 때, 현재가가 곡선에 닿으면 가진 것의 절반 매도
 #   곡선상한(up)  실행 → 현재가가 곡선상한에 닿으면 남은 것 전부 매도
 # 곡선이 '상승' 중일 때는 곡선(mid)에서 팔지 않고 상한까지 들고 감
-BTN = ("low", "mid", "up")
-BTN_NAME = {"low": "자동매수", "mid": "중간자동매도", "up": "자동매도"}
+BTN = ("low", "mid", "up", "add")
+BTN_NAME = {"low": "자동매수", "mid": "중간자동매도", "up": "자동매도", "add": "추가매수"}
+ADD_N_DEFAULT, ADD_PCT_DEFAULT = 2, 5.0      # 추가매수 기본값: 총 2번, 직전 매수가보다 5% 더 내려가면
 WAIT, BUYING, HOLD, SELLING, DONE, ERROR = "대기", "매수주문", "보유", "매도주문", "완료", "오류"
 PENDING = (BUYING, SELLING)
 
@@ -419,7 +420,8 @@ class Engine:
                 if self.has_pending():
                     return "주문이 걸려 있는 코인이 있어 모드를 바꿀 수 없습니다. 버튼을 취소하거나 체결을 기다려 주세요."
                 for r in self.data["rules"].values():          # 모의로 '산 셈 친' 것을 실전으로 넘기지 않음
-                    r.update(state=WAIT, held=0.0, half_done=False, order=None, kind=None, msg="모드 변경으로 초기화")
+                    r.update(state=WAIT, held=0.0, half_done=False, order=None, kind=None, msg="모드 변경으로 초기화",
+                             buys=0, last_buy=None, last_buy_day=None)
                 self.data["mock"] = bool(mock)
                 self.data["enabled"] = False
                 self._save()
@@ -444,6 +446,16 @@ class Engine:
             self._save()
             return note
 
+    def set_add(self, market: str, name: str = "", n: int | None = None, pct: float | None = None):
+        """추가매수 설정: n = 총 매수 횟수(처음 포함, 2~10), pct = 직전 매수가보다 몇 % 더 내려가면 (1~50)"""
+        with self.lock:
+            r = self._rule(market, name)
+            if n is not None:
+                r["add_n"] = max(2, min(10, int(n)))
+            if pct is not None:
+                r["add_pct"] = max(1.0, min(50.0, float(pct)))
+            self._save()
+
     def toggle(self, market: str, key: str, name: str = "") -> str:
         """버튼 한 번 누름: 실행 ↔ 취소. 돌려주는 값 = 알림 문장(없으면 빈칸)"""
         with self.lock:
@@ -456,7 +468,9 @@ class Engine:
                 r["short"] = False
             note = ""
             if not on and r.get("state") in PENDING:          # 그 버튼으로 걸린 주문이면 취소
-                mine = (key == "low" and r["state"] == BUYING) or (r["state"] == SELLING and r.get("kind") == key)
+                mine = ((key == "low" and r["state"] == BUYING and r.get("kind") != "add")
+                        or (key in ("add", "low") and r["state"] == BUYING and r.get("kind") == "add")
+                        or (r["state"] == SELLING and r.get("kind") == key))
                 if mine:
                     self._cancel(r, f"{BTN_NAME[key]} 취소 버튼으로 주문 취소")
                     note = f"{r['name']}: 걸려 있던 주문을 취소했습니다."
@@ -478,7 +492,8 @@ class Engine:
         with self.lock:
             for m, r in self.data["rules"].items():
                 if (market is None or m == market) and r.get("state") not in PENDING:
-                    r.update(state=WAIT, held=0.0, half_done=False, order=None, kind=None, msg="")
+                    r.update(state=WAIT, held=0.0, half_done=False, order=None, kind=None, msg="",
+                             buys=0, last_buy=None, last_buy_day=None)
             self._save()
 
     def planned_krw(self) -> float:
@@ -572,41 +587,7 @@ class Engine:
                     r["msg"] = ""
                     r["short"] = r["miss"] = False
                     return
-                if mock:                                    # 모의: 호가를 못 받으면 매수가능 값으로 계산
-                    try:
-                        ask, bid = self.quote_fn(m)
-                        price = order_price(m, "bid", ask, bid, p)
-                    except Exception:
-                        price = fit_price(m, b["low"], "bid", p)
-                else:
-                    ask, bid = self.quote_fn(m)
-                    price = order_price(m, "bid", ask, bid, p)     # 매도 1호가 + 2호가
-                vol = buy_volume(self.buy_krw(r), price)
-                cost = float(price * vol)
-                if cost < MIN_ORDER_KRW:
-                    raise UpbitError(f"주문 금액 {cost:,.0f}원 < 최소 {MIN_ORDER_KRW:,}원")
-                if mock:
-                    r.update(state=HOLD, held=float(vol), half_done=False, dust=False, close_ok=False,
-                             msg=f"자동매수 {fmt_dec(price)}원(모의)")
-                    self._log(r, "자동매수 체결(모의)", float(price), float(vol))
-                    return
-                krw = (acc or {}).get("KRW", {}).get("balance", 0.0)
-                need = cost * (1 + FEE)
-                if krw < need:
-                    # 앞서 주문한 코인들이 예수금을 묶어서 모자람 → 주문을 보내지 않고 알림만 남김 (돈이 생기면 그때 매수)
-                    r["msg"] = f"예수금 부족 (필요 {need:,.0f}원 / 있음 {krw:,.0f}원) — 주문 안 함, 기다리는 중"
-                    if not r.get("short"):                     # 기록은 처음 한 번만 (3초마다 쌓이지 않게)
-                        r["short"] = True
-                        self._log(r, "예수금 부족 — 주문 안 함", float(price), float(vol),
-                                  f"필요 {need:,.0f}원 / 있음 {krw:,.0f}원")
-                    return
-                o = self.client.limit_order(m, "bid", vol, price)
-                if acc is not None and "KRW" in acc:           # 같은 3초 안의 다음 코인이 이 돈을 또 쓰지 않게 바로 뺌
-                    acc["KRW"]["balance"] = krw - need
-                r["short"] = False
-                r.update(state=BUYING, order=o["uuid"], kind="low", msg=f"자동매수 주문 {fmt_dec(price)}원 (FOK)")
-                if not r.get("miss"):                          # 체결 못 하고 다시 시도하는 중이면 기록을 쌓지 않음
-                    self._log(r, "자동매수 주문", float(price), float(vol), "매도1호가+2호가 · 전량 체결 아니면 취소(FOK)")
+                self._buy(r, m, p, b, acc, add=False)
             elif r.get("mid") or r.get("up"):               # 하한 매수 없이 → 이미 가진 코인을 팔기
                 if mock:
                     r["msg"] = "모의 모드에서는 자동매수로 산 코인만 팔 수 있어요"
@@ -623,16 +604,18 @@ class Engine:
                 return
             o = self.client.get_order(r["order"])
             ex = float(o.get("executed_volume") or 0)
+            add = r.get("kind") == "add"
+            what = "추가매수" if add else "자동매수"
             if o["state"] in ("done", "cancel") and ex > 0:
-                r.update(state=HOLD, held=ex, half_done=False, order=None, kind=None, miss=False, dust=False,
-                         close_ok=False, msg=f"매수 체결 {ex:g}개")
-                self._log(r, "자동매수 체결", _avg_price(o), ex)
+                ap = _avg_price(o) or 0.0
+                self._bought(r, ex, ap, (r.get("bands") or {}).get("day") or trading_day(), add)
+                self._log(r, what + " 체결", ap, ex, self._nth(r))
             elif o["state"] in ("done", "cancel"):           # FOK: 그 가격 안에 물량이 모자라 하나도 안 사고 취소됨
-                r.update(state=WAIT, order=None, kind=None,
+                r.update(state=HOLD if add else WAIT, order=None, kind=None,
                          msg="호가 물량이 모자라 체결 안 됨(FOK 취소) — 3초 뒤 다시 시도")
                 if not r.get("miss"):
                     r["miss"] = True
-                    self._log(r, "자동매수 체결 안 됨(FOK 취소)", _f(o.get("price")), 0, "다시 시도합니다")
+                    self._log(r, what + " 체결 안 됨(FOK 취소)", _f(o.get("price")), 0, "다시 시도합니다")
             else:
                 r["msg"] = f"매수 주문 체결 기다리는 중 ({ex:g}개 체결)"
             return
@@ -646,6 +629,7 @@ class Engine:
                     # 업비트 앱에서 직접 팔았거나(전부/대부분) 남은 게 5,000원 미만 → 더 팔 수 없으니 이 코인 매매를 정리
                     nxt = self._after_all(r)
                     r.update(state=nxt, held=0.0, half_done=False, order=None, kind=None, miss=False, dust=False,
+                             buys=0, last_buy=None, last_buy_day=None,
                              msg="업비트에서 직접 판 것으로 보여 정리했어요" +
                                  (" → 다시 자동매수 대기" if nxt == WAIT else ""))
                     self._log(r, "보유 없음 — 직접 매도로 보고 정리", p, bal,
@@ -660,8 +644,8 @@ class Engine:
             elif r.get("mid") and b["falling"] and not r.get("half_done") and p >= b["mid"]:
                 kind, target, vol = "mid", b["mid"], held / 2                 # 절반 매도
             if kind is None:
-                r["msg"] = "보유 중 · 추세 " + ("하락" if b["falling"] else "상승")
-                r["miss"] = False
+                r["msg"] = "보유 중 · 추세 " + ("하락" if b["falling"] else "상승") + f" · {self._nth(r)}"
+                self._maybe_add(r, m, p, b, acc)
                 return
             if mock:
                 try:
@@ -716,6 +700,90 @@ class Engine:
                 r["msg"] = f"{what} 체결 기다리는 중 ({ex:g}개 체결)"
             return
 
+    def _buy(self, r: dict, m: str, p: float, b: dict, acc: dict | None, add: bool):
+        """매수 주문 (처음 매수 / 추가매수 공통): 매도1호가+2호가 지정가 + FOK, 예수금 확인"""
+        mock = self.data["mock"]
+        what = "추가매수" if add else "자동매수"
+        if mock:                                    # 모의: 호가를 못 받으면 매수가능 값으로 계산
+            try:
+                ask, bid = self.quote_fn(m)
+                price = order_price(m, "bid", ask, bid, p)
+            except Exception:
+                price = fit_price(m, b["low"], "bid", p)
+        else:
+            ask, bid = self.quote_fn(m)
+            price = order_price(m, "bid", ask, bid, p)     # 매도 1호가 + 2호가
+        vol = buy_volume(self.buy_krw(r), price)
+        cost = float(price * vol)
+        if cost < MIN_ORDER_KRW:
+            raise UpbitError(f"주문 금액 {cost:,.0f}원 < 최소 {MIN_ORDER_KRW:,}원")
+        if mock:
+            self._bought(r, float(vol), float(price), b["day"], add)
+            self._log(r, what + " 체결(모의)", float(price), float(vol), self._nth(r))
+            return
+        krw = (acc or {}).get("KRW", {}).get("balance", 0.0)
+        need = cost * (1 + FEE)
+        if krw < need:
+            # 앞서 주문한 코인들이 예수금을 묶어서 모자람 → 주문을 보내지 않고 알림만 남김 (돈이 생기면 그때 매수)
+            r["msg"] = f"예수금 부족 (필요 {need:,.0f}원 / 있음 {krw:,.0f}원) — 주문 안 함, 기다리는 중"
+            if not r.get("short"):                     # 기록은 처음 한 번만 (3초마다 쌓이지 않게)
+                r["short"] = True
+                self._log(r, "예수금 부족 — 주문 안 함", float(price), float(vol),
+                          f"필요 {need:,.0f}원 / 있음 {krw:,.0f}원")
+            return
+        o = self.client.limit_order(m, "bid", vol, price)
+        if acc is not None and "KRW" in acc:           # 같은 3초 안의 다음 코인이 이 돈을 또 쓰지 않게 바로 뺌
+            acc["KRW"]["balance"] = krw - need
+        r["short"] = False
+        r.update(state=BUYING, order=o["uuid"], kind="add" if add else "low", msg=f"{what} 주문 {fmt_dec(price)}원 (FOK)")
+        if not r.get("miss"):                          # 체결 못 하고 다시 시도하는 중이면 기록을 쌓지 않음
+            self._log(r, what + " 주문", float(price), float(vol), "매도1호가+2호가 · 전량 체결 아니면 취소(FOK)")
+
+    def _nth(self, r: dict) -> str:
+        return f"매수 {r.get('buys', 0)}/{self.max_buys(r)}회"
+
+    def max_buys(self, r: dict) -> int:
+        """이번 반복에서 최대 몇 번 살지: 추가매수가 꺼져 있으면 1번 (예전과 같음)"""
+        return int(r.get("add_n") or ADD_N_DEFAULT) if r.get("add") else 1
+
+    def _bought(self, r: dict, vol: float, price: float, day: str, add: bool):
+        """매수 체결 반영: 보유 수량 더하기, 몇 번째 매수인지, 직전 매수 가격·날짜 기억"""
+        held = (r.get("held") or 0.0) if add else 0.0
+        r.update(state=HOLD, held=held + vol, buys=(r.get("buys") or 0) + 1 if add else 1,
+                 last_buy=price, last_buy_day=day, half_done=False, dust=False, miss=False,
+                 close_ok=False, add_ok=False, order=None, kind=None,
+                 msg=f"{'추가매수' if add else '자동매수'} 체결 {price:,.8g}원")
+
+    def _maybe_add(self, r: dict, m: str, p: float, b: dict, acc: dict | None):
+        """추가매수: 하루 한 번, 직전 매수 가격보다 N% 더 내려가고 매수가능 값 아래일 때.
+        ▲상승 추세면 닿으면 바로, ▼하락 추세면 다음 날 09:00에 어제 종가로 판단 (처음 매수와 같은 규칙)"""
+        if not (r.get("low") and r.get("add") and r.get("last_buy")):
+            return
+        n, mx = r.get("buys") or 1, self.max_buys(r)
+        if n >= mx:
+            r["msg"] = f"보유 중 · {mx}번 모두 매수"
+            return
+        if r.get("last_buy_day") == b["day"]:
+            r["msg"] += " · 추가매수는 내일부터 (하루 한 번)"
+            return
+        pct = float(r.get("add_pct") or ADD_PCT_DEFAULT)
+        target = r["last_buy"] * (1 - pct / 100)             # 직전 매수가보다 pct% 아래
+        cond = f"{n + 1}번째 매수 조건: {target:,.8g}원 이하 + 매수가능 값 아래"
+        if b["falling"]:
+            if r.get("add_chk") != b["day"]:
+                r["add_chk"] = b["day"]
+                r["add_ok"] = b["close_y"] <= b["low_y"] and b["close_y"] <= target
+                self._log(r, "추가매수 종가 확인 " + ("→ 매수" if r["add_ok"] else "→ 매수 안 함"), b["close_y"], None,
+                          f"하락 추세 · 어제 종가 {b['close_y']:,.8g} / 매수가능 {b['low_y']:,.8g} / 기준 {target:,.8g}")
+            if not r.get("add_ok"):
+                r["msg"] += f" · {cond} (하락 추세: 내일 09:00 종가로 판단)"
+                return
+        elif not (p <= b["low"] and p <= target):
+            r["msg"] += f" · {cond}"
+            r["miss"] = r["short"] = False
+            return
+        self._buy(r, m, p, b, acc, add=True)
+
     def _after_all(self, r: dict) -> str:
         """다 판 뒤: 곡선하한 버튼이 '실행'이면 다시 매수 대기, 아니면 완료"""
         return WAIT if r.get("low") else DONE
@@ -726,11 +794,13 @@ class Engine:
             r.update(state=HOLD, held=left, half_done=True, order=None, kind=None, msg=msg)
         else:
             r.update(state=self._after_all(r), held=0.0, half_done=False, order=None, kind=None,
+                     buys=0, last_buy=None, last_buy_day=None,
                      msg=msg + (" → 다시 자동매수 대기" if r.get("low") else ""))
 
     def _cancel(self, r: dict, why: str):
         if self.data["mock"] or not r.get("order"):
-            r.update(state=WAIT if r.get("state") == BUYING else HOLD, order=None, kind=None, msg=why)
+            r.update(state=WAIT if (r.get("state") == BUYING and r.get("kind") != "add") else HOLD,
+                     order=None, kind=None, msg=why)
             return
         try:
             self.client.cancel(r["order"])
@@ -740,8 +810,14 @@ class Engine:
             ex = float(self.client.get_order(r["order"]).get("executed_volume") or 0)
         except Exception:
             ex = 0.0
-        if r["state"] == BUYING:
-            r.update(state=HOLD if ex > 0 else WAIT, held=ex, half_done=False, order=None, kind=None, msg=why)
+        if r["state"] == BUYING and r.get("kind") == "add":       # 추가매수 주문 취소: 원래 들고 있던 건 그대로
+            if ex > 0:
+                r["held"] = (r.get("held") or 0.0) + ex
+                r["buys"] = (r.get("buys") or 1) + 1
+            r.update(state=HOLD, order=None, kind=None, msg=why)
+        elif r["state"] == BUYING:
+            r.update(state=HOLD if ex > 0 else WAIT, held=ex, half_done=False, order=None, kind=None, msg=why,
+                     buys=1 if ex > 0 else 0)
         else:
             left = max((r.get("held") or 0) - ex, 0.0)
             r.update(state=HOLD if left > 0 else self._after_all(r), held=left, order=None, kind=None, msg=why)
