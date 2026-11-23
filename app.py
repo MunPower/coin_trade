@@ -538,7 +538,8 @@ LIST2_CSS = """<style>
 
 BTN_HELP = {"up": "현재가가 매도가능(곡선상한)에 닿으면 남은 것 전부 매도",
             "mid": "추세가 하락 중일 때 현재가가 중간값(곡선)에 닿으면 절반 매도",
-            "low": "현재가가 매수가능(곡선하한)에 닿으면 '자동매수 1회 금액'만큼 매수"}
+            "low": "▲상승 추세: 매수가능(곡선하한)에 닿으면 바로 매수 · "
+                   "▼하락 추세: 다음 날 09:00에 어제 종가가 매수가능 값 아래였으면 매수"}
 BTN_TAG = {"up": "매도", "mid": "중간", "low": "매수"}       # 리스트 줄에 붙는 작은 표시
 BTN_LABEL = {"up": "자동매도", "mid": "중간자동매도", "low": "자동매수"}   # 펼친 칸의 버튼 이름
 
@@ -674,17 +675,24 @@ def _hold_box(eng, acc, m, sym, close) -> str:
 
 def _coin_panel(eng, acc, m, kr, sym, close, rule):
     """펼쳐진 칸: 코인·현재가 / 곡선 방향 / 상한·곡선·하한 / 보유·진행 / 매수 금액 / 버튼 3개"""
-    b = rule.get("bands")                                   # 엔진이 마지막으로 계산한 값 (켜져 있을 때)
-    if not b:
+    b = rule.get("bands")                                   # 엔진이 방금 계산한 값 (자동매매가 켜져 있을 때)
+    if not (b and eng.snapshot()["enabled"] and b.get("day") == trader.trading_day()
+            and time.time() - eng.last_tick < 30):
+        b = None
         d = cached_hist(f"upbit:{m}", max(int(calc), 180))
-        if d is not None and len(d) >= 60 and close:
+        if d is not None and len(d) >= 61 and close:
             y = d["Close"].to_numpy(dtype=float).copy()
+            bc = trader.bands_now(y[:-1])                  # 어제 종가까지 확정된 곡선 → 오늘의 추세 (엔진과 같은 기준)
             y[-1] = close
             b = trader.bands_now(y)
+            b["falling"] = bc["falling"]
     if b:
         arrow = ('<span style="color:#1a56db">▼ 하락</span>' if b["falling"]
                  else '<span style="color:#e5484d">▲ 상승</span>')
-        lines = (f'<div style="font-size:14px;margin-top:4px">추세 {arrow}</div>'
+        rule_txt = ("자동매수는 종가 확인 후 (내일 09:00 판단)" if b["falling"]
+                    else "자동매수는 매수가능 값에 닿으면 바로")
+        lines = (f'<div style="font-size:14px;margin-top:4px">추세 {arrow} '
+                 f'<span style="font-size:12px;color:#888">(어제 종가 기준 · {rule_txt})</span></div>'
                  f'<div style="font-size:14px"><span style="color:#1a56db">매도가능 {px(b["up"])}</span> · '
                  f'중간값 {px(b["mid"])} · <span style="color:#e5484d">매수가능 {px(b["low"])}</span></div>')
     else:

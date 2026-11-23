@@ -2,7 +2,9 @@
 
 화면(app.py)과 따로 떨어진 '두뇌' 부분입니다. streamlit 없이도 동작합니다.
 매매 기준은 차트의 세 선입니다 (app.py 차트와 똑같은 계산):
-  · 자동매수     : 매수가능선(곡선하한)에서 매수
+  · 추세(상승/하락)는 어제 종가로 확정된 곡선 방향 — 오전 9시에 정해지고 하루 동안 바뀌지 않음
+  · 자동매수     : ▲상승이면 매수가능선(곡선하한)에 닿으면 바로 매수
+                   ▼하락이면 닿아도 기다렸다가, 다음 날 09:00에 어제 종가가 매수가능 값 아래면 매수
   · 중간자동매도 : 추세가 하락 중일 때 중간값(곡선)에서 절반 매도 (상승 중이면 건너뜀)
   · 자동매도     : 매도가능선(곡선상한)에서 남은 것 전부 매도
 코인마다 [자동매도] [중간자동매도] [자동매수] 버튼을 켜 둔 것만 동작합니다.
@@ -259,10 +261,23 @@ def bands_now(y) -> dict:
             "falling": bool(curve[-1] < curve[-2])}
 
 
+def trading_day(ts: float | None = None) -> str:
+    """업비트 일봉 날짜 (한국시간 오전 9시에 하루가 바뀜) → 'YYYY-MM-DD'"""
+    ts = time.time() if ts is None else ts
+    return time.strftime("%Y-%m-%d", time.gmtime(ts))   # 한국 09:00 = 세계표준시 00:00
+
+
+_last_day: dict = {}          # {마켓: 받아 온 일봉 중 마지막 캔들의 날짜}
+
+
+def last_candle_day(market: str) -> str | None:
+    return _last_day.get(market)
+
+
 def closes(market: str, days: int = CALC_DAYS) -> np.ndarray:
-    """업비트 일봉 종가 (오래된 것 → 최근). 10분 동안 저장"""
+    """업비트 일봉 종가 (오래된 것 → 최근). 10분 동안 저장. 오전 9시가 지나 날이 바뀌면 바로 다시 받음"""
     ent = _hist_cache.get(market)
-    if ent and time.time() - ent[0] < HIST_TTL:
+    if ent and time.time() - ent[0] < HIST_TTL and ent[2] == trading_day():
         return ent[1].copy()
     got, to = [], None
     while len(got) < days:
@@ -289,7 +304,9 @@ def closes(market: str, days: int = CALC_DAYS) -> np.ndarray:
             rows.append((d, float(c["trade_price"])))
     rows.sort()
     y = np.array([v for _, v in rows][-days:], dtype=float)
-    _hist_cache[market] = (time.time(), y)
+    _hist_cache[market] = (time.time(), y, trading_day())
+    if rows:
+        _last_day[market] = rows[-1][0]
     return y.copy()
 
 
@@ -306,8 +323,10 @@ PENDING = (BUYING, SELLING)
 
 
 class Engine:
-    def __init__(self, folder: Path, client: Upbit | None = None, price_fn=prices, closes_fn=closes, quote_fn=quotes):
+    def __init__(self, folder: Path, client: Upbit | None = None, price_fn=prices, closes_fn=closes, quote_fn=quotes,
+                 lastday_fn=last_candle_day):
         self.quote_fn = quote_fn
+        self.lastday_fn = lastday_fn
         self.folder = Path(folder)
         self.path = self.folder / "trade_state.json"
         self.csv = self.folder / "trade_log.csv"
@@ -501,11 +520,21 @@ class Engine:
                     continue
                 try:
                     y = self.closes_fn(r["market"])
-                    if len(y) < 60:
+                    if len(y) < 61:
                         r["msg"] = "일봉이 60개보다 적어 추세를 계산할 수 없습니다"
                         continue
-                    y[-1] = p                                   # 오늘 캔들 = 지금 가격 (차트와 같음)
-                    b = bands_now(y)
+                    today = trading_day()
+                    has_today = self.lastday_fn(r["market"]) in (None, today)   # 오늘 캔들이 이미 생겼는지
+                    conf = y[:-1] if has_today else y.copy()    # 어제까지 확정된 종가
+                    bc = bands_now(conf)                         # 어제 종가 기준: 오늘 하루 동안 쓰는 '추세'
+                    if has_today:
+                        y[-1] = p                               # 오늘 캔들 = 지금 가격 (차트와 같음)
+                    else:
+                        y = np.append(y, p)
+                    b = bands_now(y)                             # 매수가능·중간값·매도가능 선은 지금 가격까지 넣어 계산
+                    b["falling"] = bc["falling"]                 # 상승/하락 판단은 어제 종가로 확정된 값 (하루 종일 안 바뀜)
+                    b["close_y"], b["low_y"] = float(conf[-1]), bc["low"]   # 어제 종가, 어제의 매수가능 값
+                    b["day"] = today
                     r["bands"] = b
                     self._advance(r, p, b, acc)
                 except UpbitError as e:
@@ -521,7 +550,25 @@ class Engine:
 
         if s == WAIT:
             if r.get("low"):
-                if p > b["low"]:
+                if b["falling"]:
+                    # ▼ 하락 추세: 닿아도 바로 사지 않음 → 오전 9시가 지나 어제 종가가 확정되면 하루 한 번 판단
+                    if r.get("day_chk") == b["day"] and not r.get("close_ok"):
+                        r["msg"] = ("하락 추세 — 종가 확인 후 매수 · 다음 판단: 내일 09:00" +
+                                    (" (지금 매수가능 값 아래)" if p <= b["low"] else ""))
+                        r["short"] = r["miss"] = False
+                        return
+                    if r.get("day_chk") != b["day"]:
+                        r["day_chk"] = b["day"]
+                        r["close_ok"] = b["close_y"] <= b["low_y"]
+                        self._log(r, "종가 확인 " + ("→ 매수" if r["close_ok"] else "→ 매수 안 함"), b["close_y"], None,
+                                  f"하락 추세 · 어제 종가 {b['close_y']:,.8g} / 어제 매수가능 {b['low_y']:,.8g}")
+                        if not r["close_ok"]:
+                            r["msg"] = ("하락 추세 — 종가 확인 후 매수 · 다음 판단: 내일 09:00" +
+                                        (" (지금 매수가능 값 아래)" if p <= b["low"] else ""))
+                            return
+                    # close_ok: 오늘 매수 (예수금 부족이나 FOK 실패면 오늘 안에서 다시 시도)
+                elif p > b["low"]:
+                    # ▲ 상승 추세: 매수가능 값에 닿으면 바로 매수
                     r["msg"] = ""
                     r["short"] = r["miss"] = False
                     return
@@ -539,7 +586,8 @@ class Engine:
                 if cost < MIN_ORDER_KRW:
                     raise UpbitError(f"주문 금액 {cost:,.0f}원 < 최소 {MIN_ORDER_KRW:,}원")
                 if mock:
-                    r.update(state=HOLD, held=float(vol), half_done=False, dust=False, msg=f"자동매수 {fmt_dec(price)}원(모의)")
+                    r.update(state=HOLD, held=float(vol), half_done=False, dust=False, close_ok=False,
+                             msg=f"자동매수 {fmt_dec(price)}원(모의)")
                     self._log(r, "자동매수 체결(모의)", float(price), float(vol))
                     return
                 krw = (acc or {}).get("KRW", {}).get("balance", 0.0)
@@ -577,7 +625,7 @@ class Engine:
             ex = float(o.get("executed_volume") or 0)
             if o["state"] in ("done", "cancel") and ex > 0:
                 r.update(state=HOLD, held=ex, half_done=False, order=None, kind=None, miss=False, dust=False,
-                         msg=f"매수 체결 {ex:g}개")
+                         close_ok=False, msg=f"매수 체결 {ex:g}개")
                 self._log(r, "자동매수 체결", _avg_price(o), ex)
             elif o["state"] in ("done", "cancel"):           # FOK: 그 가격 안에 물량이 모자라 하나도 안 사고 취소됨
                 r.update(state=WAIT, order=None, kind=None,
